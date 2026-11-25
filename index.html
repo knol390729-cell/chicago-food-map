@@ -85,6 +85,8 @@ select option{background:#111a26;color:var(--ink)}
 .lh{display:flex;align-items:center;gap:8px;padding:12px 12px 10px 16px;border-bottom:1px solid var(--line)}
 .lh h2{margin:0;font:700 20px/1 "Barlow Condensed",sans-serif;flex:1}
 .lh select{height:36px;width:auto;font-size:14px;padding:0 8px}
+.lh .addmini{display:none;height:36px;padding:0 12px;border-radius:999px;gap:5px;font:700 16px/1 "Barlow Condensed",Barlow,system-ui,sans-serif;letter-spacing:.02em;flex:none}
+.ro .addmini{display:none!important}
 .rows{list-style:none;margin:0;padding:6px;overflow:auto;flex:1;overscroll-behavior:contain}
 .row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px;border-radius:12px;cursor:pointer;border:1px solid transparent}
 .row:hover{background:rgba(255,255,255,.05)}
@@ -182,8 +184,8 @@ textarea.in{height:auto;min-height:84px;padding:10px 12px;resize:vertical;line-h
  body.list-off .list .rows{visibility:hidden}
  .card{left:calc(8px + var(--sa-l));right:calc(8px + var(--sa-r));bottom:calc(8px + var(--sa-b));width:auto;max-height:62dvh;overflow:auto;z-index:8}
  .card h3{font-size:30px}
- .fab{bottom:calc(min(46dvh,420px) + 18px + var(--sa-b));height:50px;font-size:17px}
- body.list-off .fab{bottom:calc(76px + var(--sa-b))}
+ .fab{display:none}
+ .lh .addmini{display:inline-flex;align-items:center}
  body.card-open .fab,body.card-open .list{display:none}
  .status{display:none}
  .grid{grid-template-columns:minmax(0,1fr)}
@@ -203,7 +205,7 @@ textarea.in{height:auto;min-height:84px;padding:10px 12px;resize:vertical;line-h
 .wxp button{height:38px;padding:0 13px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.06);font-weight:600;font-size:14px}
 .wxp button[aria-pressed=true]{background:#f4f7fb;color:#0b1220}
 body.ui-off .wx,body.picking .wx,body.ui-off .wxp,body.picking .wxp{display:none}
-@media(max-width:700px){.wx{top:auto;left:calc(10px + var(--sa-l));transform:none;bottom:calc(70px + var(--sa-b));height:36px}.wxp{top:auto;bottom:calc(112px + var(--sa-b))}body.card-open .wx{display:none}}
+@media(max-width:700px){.wx{top:auto;left:calc(10px + var(--sa-l));transform:none;bottom:calc(70px + var(--sa-b));height:36px}.wxp{top:auto;bottom:calc(112px + var(--sa-b))}body.card-open .wx,body:not(.list-off) .wx,body:not(.list-off) .wxp{display:none}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
@@ -249,6 +251,7 @@ body.ui-off .wx,body.picking .wx,body.ui-off .wxp,body.picking .wxp{display:none
       <option value="az">A–Z</option>
       <option value="hood">Neighborhood</option>
     </select>
+    <button class="btn pri addmini" id="addMini" aria-label="Add a spot"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2"><path d="M12 5v14M5 12h14"/></svg>Add</button>
   </div>
   <ol class="rows" id="rows"></ol>
 </aside>
@@ -1031,6 +1034,7 @@ function openSheet(s = null, keep = false) {
 }
 function closeSheet() { $('#scrim').hidden = true; editing = null; }
 $('#addBtn').addEventListener('click', async () => { if (await ensureUnlocked('name')) openSheet(); });
+$('#addMini').addEventListener('click', async e => { e.stopPropagation(); if (await ensureUnlocked('name')) openSheet(); });
 $('#sheetClose').addEventListener('click', closeSheet);
 $('#cancelBtn').addEventListener('click', closeSheet);
 $('#scrim').addEventListener('click', e => { if (e.target.id === 'scrim') closeSheet(); });

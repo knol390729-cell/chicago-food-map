@@ -1,0 +1,1668 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Chicago Food Map</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="theme-color" content="#070b12">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Chi Food Map">
+<script>
+/* App version: talk to the shared Google Sheet through its JSON API (same calls as google.script.run). */
+(() => {
+  const API = 'https://script.google.com/macros/s/AKfycbz0PqbIKSZFPSHEVaaWg7E8Jf4faSvGPXO7rXxNv-Sev82vMWePOc1caf3oz-ixiZv94w/exec';
+  const call = (fn, args) => fetch(API, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ fn, args }), redirect: 'follow' })
+    .then(r => { if (!r.ok) throw new Error('Network error ' + r.status); return r.json(); })
+    .then(j => { if (!j.ok) throw new Error(j.error || 'Request failed'); return j.result; });
+  const run = (ok, fail) => new Proxy({}, { get: (t, p) => {
+    if (p === 'withSuccessHandler') return f => run(f, fail);
+    if (p === 'withFailureHandler') return f => run(ok, f);
+    if (typeof p !== 'string' || p === 'then') return undefined;
+    return (...args) => { call(p, args).then(v => ok && ok(v), e => fail ? fail(e) : console.error(e)); };
+  } });
+  window.google = { script: { get run() { return run(null, null); } } };
+  if ('serviceWorker' in navigator && location.protocol === 'https:') addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+})();
+</script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+<style>
+/* VOICE: a night out with friends: confident, warm, a little cinematic
+   IDEA: the Chicago flag laid over a night skyline: river and lake in flag blue, every spot a six-point star
+   PICTURE: full-bleed 3D downtown at night, lit windows, glowing river, star pins rising over the towers
+   COLOUR and TYPE: midnight #070b12, flag blue #41b6e6, star red #ff3d3d; Barlow Condensed titles, Barlow text
+   LAYOUT: scene fills the screen; glass search bar top-left, spot list right, card bottom-left; sheets on phones */
+:root{color-scheme:dark;--bg:#070b12;--panel:rgba(11,17,27,.80);--panel2:rgba(20,29,42,.92);--line:rgba(255,255,255,.09);--ink:#eef3f8;--mute:#93a3b6;--red:#ff3d3d;--blue:#41b6e6;--amber:#ffb547;--pink:#ff7ac6;--r:16px;--sa-t:env(safe-area-inset-top,0px);--sa-b:env(safe-area-inset-bottom,0px);--sa-l:env(safe-area-inset-left,0px);--sa-r:env(safe-area-inset-right,0px)}
+:root[data-theme=light],:root[data-theme=dark]{color-scheme:dark}
+*{box-sizing:border-box;min-width:0}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 Barlow,system-ui,sans-serif;overflow:hidden;-webkit-font-smoothing:antialiased}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+#stage{position:fixed;inset:0}
+#stage canvas{display:block;touch-action:none}
+.lbls{position:fixed;inset:0;pointer-events:none}
+.lbl{font:600 13px/1 "Barlow Condensed",sans-serif;color:rgba(222,234,248,.72);white-space:nowrap;text-shadow:0 1px 6px #000,0 0 2px #000;letter-spacing:.02em}
+.lbl.hood{font-size:17px;color:rgba(236,244,252,.88)}
+.lbl.hood.t2,.lbl.hood.t1{font-size:14px;color:rgba(222,234,248,.68)}
+.lbl.water{font-style:italic;color:rgba(130,210,240,.8);font-size:16px}
+.lbl.lm{font-size:12px;color:rgba(255,214,160,.78)}
+body.ui-off .lbl.lm{opacity:.5}
+.tag{pointer-events:none;margin-bottom:22px;background:rgba(8,12,20,.9);border:1px solid var(--line);border-radius:10px;padding:6px 10px;font:600 15px/1.2 Barlow,sans-serif;white-space:nowrap;box-shadow:0 6px 20px rgba(0,0,0,.45)}
+.tag small{display:block;font-weight:500;font-size:13px;color:var(--mute)}
+.glass{background:var(--panel);backdrop-filter:blur(16px) saturate(1.3);-webkit-backdrop-filter:blur(16px) saturate(1.3);border:1px solid var(--line);border-radius:var(--r);box-shadow:0 12px 40px rgba(0,0,0,.4)}
+.hud{position:fixed;top:calc(14px + var(--sa-t));left:calc(14px + var(--sa-l));width:min(380px,calc(100vw - 28px));padding:14px;display:grid;gap:10px;z-index:5;transition:opacity .25s,transform .25s}
+.brand{display:flex;gap:10px;align-items:center}
+.brand svg{flex:none;filter:drop-shadow(0 0 8px rgba(255,61,61,.7))}
+h1{margin:0;font:700 26px/1.05 "Barlow Condensed",sans-serif;letter-spacing:.01em}
+.stats{margin:2px 0 0;font-size:13px;color:var(--mute)}
+.search{position:relative}
+.search svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);opacity:.6}
+.search input{width:100%;height:44px;border-radius:12px;border:1px solid var(--line);background:rgba(255,255,255,.06);padding:0 40px 0 38px;font-size:16px}
+.search input::placeholder{color:#7d8ea3}
+.search kbd{position:absolute;right:10px;top:50%;transform:translateY(-50%);font:600 12px/1 Barlow,system-ui,sans-serif;color:var(--mute);border:1px solid var(--line);border-radius:6px;padding:4px 7px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{height:34px;padding:0 12px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.04);font-weight:600;font-size:14px;display:inline-flex;align-items:center;gap:6px;color:#c9d5e3}
+.chip i{width:9px;height:9px;border-radius:50%;background:var(--c,#fff);box-shadow:0 0 8px var(--c,#fff)}
+.chip[aria-pressed=true]{background:rgba(255,255,255,.14);color:#fff;border-color:rgba(255,255,255,.25)}
+.selects{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}
+select,.in{height:44px;border-radius:12px;border:1px solid var(--line);background:rgba(255,255,255,.06);padding:0 12px;font-size:16px;width:100%}
+select option{background:#111a26;color:var(--ink)}
+.tools{position:fixed;top:calc(14px + var(--sa-t));right:calc(14px + var(--sa-r));display:flex;gap:8px;z-index:6}
+.ib{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;border:1px solid var(--line);background:var(--panel);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+.ib:hover{background:var(--panel2)}
+.list{position:fixed;top:calc(72px + var(--sa-t));right:calc(14px + var(--sa-r));bottom:calc(84px + var(--sa-b));width:320px;display:flex;flex-direction:column;z-index:4;transition:opacity .25s,transform .25s;overflow:hidden}
+.lh{display:flex;align-items:center;gap:8px;padding:12px 12px 10px 16px;border-bottom:1px solid var(--line)}
+.lh h2{margin:0;font:700 20px/1 "Barlow Condensed",sans-serif;flex:1}
+.lh select{height:36px;width:auto;font-size:14px;padding:0 8px}
+.rows{list-style:none;margin:0;padding:6px;overflow:auto;flex:1;overscroll-behavior:contain}
+.row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px;border-radius:12px;cursor:pointer;border:1px solid transparent}
+.row:hover{background:rgba(255,255,255,.05)}
+.row.on{background:rgba(255,255,255,.09);border-color:rgba(255,255,255,.12)}
+.row .dot{width:12px;height:12px;border-radius:50%;background:var(--c);box-shadow:0 0 10px var(--c)}
+.row b{display:block;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row span{display:block;font-size:13px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row em{font-style:normal;font:700 18px/1 "Barlow Condensed",Barlow,system-ui,sans-serif;color:#fff}
+.row em.nr{font:500 13px/1 Barlow,system-ui,sans-serif;color:var(--mute)}
+.empty{padding:28px 18px;color:var(--mute);text-align:center;font-size:15px}
+.empty b{display:block;color:var(--ink);font:700 20px/1.2 "Barlow Condensed",Barlow,system-ui,sans-serif;margin-bottom:6px}
+.card{position:fixed;left:calc(14px + var(--sa-l));bottom:calc(14px + var(--sa-b));width:min(400px,calc(100vw - 28px));padding:18px;z-index:7;animation:up .28s ease-out}
+@keyframes up{from{opacity:0;transform:translateY(14px)}}
+.card .top{display:flex;gap:8px;align-items:flex-start}
+.badge{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 9px;border-radius:999px;font-size:13px;font-weight:600;background:color-mix(in srgb,var(--c) 22%,transparent);color:color-mix(in srgb,var(--c) 70%,#fff)}
+.card h3{margin:8px 0 2px;font:700 34px/1.02 "Barlow Condensed",sans-serif;text-wrap:balance}
+.meta{color:var(--mute);font-size:15px}
+.rate{display:flex;align-items:center;gap:10px;margin:12px 0}
+.stars{position:relative;font-size:20px;letter-spacing:2px;color:rgba(255,255,255,.18);line-height:1}
+.stars::before{content:"★★★★★"}
+.stars span{position:absolute;inset:0 auto 0 0;overflow:hidden;color:var(--amber);white-space:nowrap}
+.stars span::before{content:"★★★★★"}
+.rate b{font:700 24px/1 "Barlow Condensed",Barlow,system-ui,sans-serif}
+.dish{background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin:10px 0}
+.dish small{display:block;font-size:13px;color:var(--mute)}
+.dish p{margin:0;font-weight:600;font-size:17px}
+.notes{margin:10px 0 0;white-space:pre-wrap;color:#d8e2ee}
+.by{margin-top:12px;font-size:13px;color:var(--mute)}
+.acts{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+.btn{height:44px;padding:0 16px;border-radius:12px;border:1px solid var(--line);background:rgba(255,255,255,.07);font-weight:600;display:inline-flex;align-items:center;gap:8px;text-decoration:none;color:var(--ink);font-size:15px}
+.btn:hover{background:rgba(255,255,255,.12)}
+.btn.pri{background:var(--red);border-color:transparent;color:#fff;box-shadow:0 6px 22px rgba(255,61,61,.35)}
+.btn.pri:hover{background:#ff5252}
+.btn.warn{color:#ff9a9a}
+.btn.warn.arm{background:#5a1717;color:#fff}
+.btn[disabled]{opacity:.5;cursor:default}
+.x{margin-left:auto;flex:none}
+.nav{display:flex;gap:6px}
+.fab{position:fixed;right:calc(14px + var(--sa-r));bottom:calc(14px + var(--sa-b));z-index:6;height:56px;padding:0 22px;border-radius:999px;font:700 19px/1 "Barlow Condensed",Barlow,system-ui,sans-serif;letter-spacing:.02em}
+.status{position:fixed;left:50%;bottom:calc(18px + var(--sa-b));transform:translateX(-50%);z-index:3;font-size:13px;color:var(--mute);display:flex;align-items:center;gap:7px;background:rgba(7,11,18,.6);padding:6px 12px;border-radius:999px;white-space:nowrap}
+.status i{width:8px;height:8px;border-radius:50%;background:#6b7a8c}
+.status.live i{background:#3ddc84;box-shadow:0 0 8px #3ddc84}
+.toast{position:fixed;left:50%;top:calc(18px + var(--sa-t));transform:translate(-50%,-80px);z-index:20;background:#f4f7fb;color:#0b1220;font-weight:600;padding:10px 16px;border-radius:12px;transition:transform .3s;max-width:calc(100vw - 28px);box-shadow:0 10px 30px rgba(0,0,0,.4)}
+.toast.on{transform:translate(-50%,0)}
+.pickbar{position:fixed;left:50%;top:calc(18px + var(--sa-t));transform:translateX(-50%);z-index:15;display:flex;gap:12px;align-items:center;padding:8px 8px 8px 16px;font-weight:600;white-space:nowrap}
+body.ui-off .hud,body.ui-off .list,body.ui-off .fab,body.ui-off .status{opacity:0;pointer-events:none;transform:translateY(-6px)}
+body.list-off .list{opacity:0;pointer-events:none;transform:translateX(12px)}
+body.picking .hud,body.picking .list,body.picking .fab,body.picking .card{display:none}
+.scrim{position:fixed;inset:0;background:rgba(3,6,10,.55);z-index:30;display:grid;place-items:center;padding:16px}
+.scrim[hidden]{display:none}
+.sheet{width:min(560px,100%);max-height:calc(100dvh - 32px);overflow:auto;background:#0e1520;border:1px solid var(--line);border-radius:20px;padding:20px;box-shadow:0 30px 80px rgba(0,0,0,.6);animation:up .25s ease-out}
+.sh{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.sh h2{margin:0;font:700 28px/1 "Barlow Condensed",Barlow,system-ui,sans-serif;flex:1}
+.tabs{display:inline-flex;background:rgba(255,255,255,.06);border-radius:12px;padding:4px;margin-bottom:16px}
+.tabs button{height:36px;padding:0 14px;border:0;border-radius:9px;background:none;font-weight:600;color:var(--mute)}
+.tabs button[aria-selected=true]{background:rgba(255,255,255,.12);color:#fff}
+.smart{display:flex;gap:8px}
+.smart .in{flex:1}
+.sugg{margin-top:8px;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.sugg button{display:block;width:100%;text-align:left;padding:10px 12px;background:rgba(255,255,255,.03);border:0;border-bottom:1px solid var(--line);min-height:48px}
+.sugg button:last-child{border-bottom:0}
+.sugg button:hover,.sugg button:focus-visible,.sugg button[aria-selected=true]{background:rgba(255,255,255,.09)}
+.sugg b{display:block;font-weight:600}
+.sugg span{display:block;font-size:13px;color:var(--mute)}
+.sugg p{margin:0;padding:10px 12px;font-size:13px;color:var(--mute)}
+.addr{font-size:14px;color:#b9c6d6;margin-top:3px}
+.hint{font-size:13px;color:var(--mute);margin:6px 0 0}
+.hint.ok{color:#8fe3b3}.hint.bad{color:#ffaaaa}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin-top:16px}
+.grid .full{grid-column:1/-1}
+label.f{display:grid;gap:5px;font-size:13px;font-weight:600;color:#c3cfdd}
+textarea.in{height:auto;min-height:84px;padding:10px 12px;resize:vertical;line-height:1.45}
+.rstars{display:flex;align-items:center;gap:2px}
+.rstars button{width:36px;height:44px;border:0;background:none;font-size:26px;color:rgba(255,255,255,.2);padding:0}
+.rstars button.on{color:var(--amber)}
+.rstars .in{width:76px;margin-left:8px}
+.loc{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:rgba(255,255,255,.04);border:1px dashed rgba(255,255,255,.14);border-radius:12px;padding:10px 12px;font-size:14px;color:#c9d5e3}
+.loc span{flex:1}
+.foot{display:flex;gap:8px;justify-content:flex-end;margin-top:18px;flex-wrap:wrap}
+.pv{margin-top:12px;max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:12px}
+.pv table{width:100%;border-collapse:collapse;font-size:14px}
+.pv td,.pv th{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+.pv th{color:var(--mute);font-weight:600;position:sticky;top:0;background:#101824}
+.spin{width:16px;height:16px;border:2px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:sp 0.8s linear infinite;display:inline-block}
+@keyframes sp{to{transform:rotate(1turn)}}
+.legend{font-size:12px;color:var(--mute)}
+.ro .fab{display:none}
+@media(max-width:700px){
+ .hud{width:calc(100vw - 80px - var(--sa-l) - var(--sa-r));padding:10px;gap:8px;left:calc(10px + var(--sa-l));top:calc(10px + var(--sa-t))}
+ .tools{top:calc(10px + var(--sa-t));right:calc(10px + var(--sa-r));flex-direction:column}
+ .brand{display:none}
+ body:not(.filters-open) .filters{display:none}
+ .list{top:auto;left:calc(8px + var(--sa-l));right:calc(8px + var(--sa-r));bottom:calc(8px + var(--sa-b));width:auto;height:min(46dvh,420px);border-radius:20px 20px 16px 16px}
+ body.list-off .list{transform:translateY(calc(100% - 58px));opacity:1;pointer-events:auto}
+ body.list-off .list .rows{visibility:hidden}
+ .card{left:calc(8px + var(--sa-l));right:calc(8px + var(--sa-r));bottom:calc(8px + var(--sa-b));width:auto;max-height:62dvh;overflow:auto;z-index:8}
+ .card h3{font-size:30px}
+ .fab{bottom:calc(min(46dvh,420px) + 18px + var(--sa-b));height:50px;font-size:17px}
+ body.list-off .fab{bottom:calc(76px + var(--sa-b))}
+ body.card-open .fab,body.card-open .list{display:none}
+ .status{display:none}
+ .grid{grid-template-columns:minmax(0,1fr)}
+ .sheet{padding:16px;border-radius:18px}
+ .scrim{padding:8px;align-items:end}
+}
+@media(min-width:701px){.fbtn{display:none}}
+@media(max-width:1000px){body.card-open .status{display:none}}
+.wx{position:fixed;top:calc(14px + var(--sa-t));left:50%;transform:translateX(-50%);z-index:4;display:flex;align-items:center;gap:8px;height:40px;padding:0 14px 0 10px;border-radius:999px;font-size:14px;font-weight:600;white-space:nowrap;cursor:pointer;border:1px solid var(--line)}
+.ib.loc-on{color:#3d9bff;border-color:rgba(61,155,255,.5)}
+.ib.loc-follow{background:#3d9bff;color:#fff;border-color:transparent}
+.ib.loc-wait svg{animation:sp 1.2s linear infinite}
+.dist{color:#8cc4ff;font-weight:600}
+.wx b{font:700 18px/1 "Barlow Condensed",Barlow,system-ui,sans-serif}
+.wx small{color:var(--mute);font-weight:500;font-size:13px}
+.wxp{position:fixed;left:50%;top:calc(62px + var(--sa-t));transform:translateX(-50%);z-index:9;display:flex;gap:6px;padding:8px;flex-wrap:wrap;justify-content:center;width:max-content;max-width:calc(100vw - 24px)}
+.wxp button{height:38px;padding:0 13px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.06);font-weight:600;font-size:14px}
+.wxp button[aria-pressed=true]{background:#f4f7fb;color:#0b1220}
+body.ui-off .wx,body.picking .wx,body.ui-off .wxp,body.picking .wxp{display:none}
+@media(max-width:700px){.wx{top:auto;left:calc(10px + var(--sa-l));transform:none;bottom:calc(70px + var(--sa-b));height:36px}.wxp{top:auto;bottom:calc(112px + var(--sa-b))}body.card-open .wx{display:none}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div id="stage" aria-label="3D map of downtown Chicago"></div>
+
+<header class="hud glass" id="hud">
+  <div class="brand">
+    <svg width="34" height="34" viewBox="-12 -12 24 24" aria-hidden="true"><path fill="#ff3d3d" d="M0-11 2.9-5 9.5-5.5 5.8 0 9.5 5.5 2.9 5 0 11-2.9 5-9.5 5.5-5.8 0-9.5-5.5-2.9-5Z"/></svg>
+    <div><h1>Chicago food map</h1><p class="stats" id="stats">Loading spots…</p></div>
+  </div>
+  <div class="search">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input id="q" type="search" placeholder="Search spots, dishes, notes" autocomplete="off" aria-label="Search spots">
+    <kbd>/</kbd>
+  </div>
+  <div class="filters">
+    <div class="chips" id="typeChips" role="group" aria-label="Spot type"></div>
+    <div class="selects" style="margin-top:8px">
+      <select id="hoodSel" aria-label="Neighborhood"></select>
+      <select id="cuisSel" aria-label="Cuisine"></select>
+    </div>
+  </div>
+</header>
+
+<div class="tools">
+  <button class="ib fbtn" id="filtBtn" aria-label="Show filters" title="Filters"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M7 12h10M10 18h4"/></svg></button>
+  <button class="ib" id="locBtn" aria-label="Show my location" title="My location"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3.2" fill="currentColor"/><circle cx="12" cy="12" r="7.5"/><path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3"/></svg></button>
+  <button class="ib" id="luckyBtn" aria-label="Surprise me" title="Surprise me"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3.5" y="3.5" width="17" height="17" rx="4"/><circle cx="8.5" cy="8.5" r="1.3" fill="currentColor"/><circle cx="15.5" cy="15.5" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/></svg></button>
+  <button class="ib" id="homeBtn" aria-label="Reset view" title="Reset view"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11 12 4l9 7M6 9.5V20h12V9.5"/></svg></button>
+  <button class="ib" id="cityBtn" aria-label="See the whole city" title="Whole city"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+  <button class="ib" id="listBtn" aria-label="Show or hide the list" title="List"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1" fill="currentColor"/><circle cx="4" cy="12" r="1" fill="currentColor"/><circle cx="4" cy="18" r="1" fill="currentColor"/></svg></button>
+  <button class="ib" id="uiBtn" aria-label="Hide interface (H)" title="Hide interface (H)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></button>
+</div>
+
+<aside class="list glass" id="list" aria-label="Spots">
+  <div class="lh">
+    <h2 id="listTitle">Spots</h2>
+    <select id="sortSel" aria-label="Sort">
+      <option value="rating">Top rated</option>
+      <option value="near">Nearest to me</option>
+      <option value="new">Newest</option>
+      <option value="az">A–Z</option>
+      <option value="hood">Neighborhood</option>
+    </select>
+  </div>
+  <ol class="rows" id="rows"></ol>
+</aside>
+
+<section class="card glass" id="card" hidden aria-live="polite"></section>
+
+<button class="btn pri fab" id="addBtn"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M12 5v14M5 12h14"/></svg>Add a spot</button>
+<div class="status" id="status"><i></i><span>Connecting…</span></div>
+<div class="toast" id="toast" role="status"></div>
+<button class="wx glass" id="wx" hidden aria-label="Chicago weather. Tap to preview other looks"><span id="wxIcon"></span><b id="wxTemp"></b><span id="wxText"></span><small id="wxTime"></small></button>
+<div class="wxp glass" id="wxp" hidden role="group" aria-label="Preview the map in different weather"></div>
+<div class="pickbar glass" id="pickbar" hidden><span>Tap the map where it is</span><button class="btn" id="pickCancel">Cancel</button></div>
+
+<div class="scrim" id="scrim" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <div class="sh"><h2 id="sheetTitle">Add a spot</h2><button class="ib x" id="sheetClose" aria-label="Close"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="tabs" role="tablist" id="tabs">
+      <button role="tab" aria-selected="true" data-tab="one">One spot</button>
+      <button role="tab" aria-selected="false" data-tab="many">Paste a list</button>
+    </div>
+
+    <form id="oneForm" data-pane="one" autocomplete="off">
+      <label class="f" id="smartLabel">Find the place
+        <div class="smart"><input class="in" id="smart" placeholder="e.g. Au Cheval, or paste a maps link" autocomplete="off"><button type="button" class="btn" id="fillBtn">Autofill</button></div>
+      </label>
+      <div class="sugg" id="sugg" hidden></div>
+      <p class="hint" id="fillHint">Autofill looks up the neighborhood, cuisine, best-known dish and exact spot. Check it before saving.</p>
+      <div class="grid">
+        <label class="f full">Name<input class="in" id="fName" required maxlength="80"></label>
+        <label class="f full">Address<input class="in" id="fAddr" maxlength="120" placeholder="Street address" autocomplete="off"></label>
+        <label class="f">Type<select id="fType"></select></label>
+        <label class="f">Neighborhood<select id="fHood"></select></label>
+        <label class="f">Cuisine<input class="in" id="fCuis" maxlength="40" list="cuisList"></label>
+        <label class="f">Favorite dish or drink<input class="in" id="fDish" maxlength="80"></label>
+        <div class="f full"><span>Rating</span><div class="rstars" id="rStars"></div></div>
+        <label class="f full">Notes<textarea class="in" id="fNotes" maxlength="600" placeholder="Order this, skip that, go on a weeknight…"></textarea></label>
+        <div class="loc full"><svg width="18" height="18" viewBox="-12 -12 24 24" aria-hidden="true"><path fill="#ff3d3d" d="M0-11 2.9-5 9.5-5.5 5.8 0 9.5 5.5 2.9 5 0 11-2.9 5-9.5 5.5-5.8 0-9.5-5.5-2.9-5Z"/></svg><span id="locText">Placed in the middle of the neighborhood</span><button type="button" class="btn" id="pickBtn">Pick on map</button></div>
+      </div>
+      <div class="foot"><button type="button" class="btn" id="cancelBtn">Cancel</button><button class="btn pri" id="saveBtn">Save spot</button></div>
+    </form>
+
+    <div data-pane="many" hidden>
+      <label class="f">Paste your list, in any format
+        <textarea class="in" id="bulk" style="min-height:150px" placeholder="Au Cheval, West Loop, burgers, single cheeseburger, 9.5/10, get the egg on top&#10;Lou Malnati's | River North | deep dish | butter crust | 4.5 | classic&#10;Frontera Grill"></textarea>
+      </label>
+      <p class="hint" id="bulkHint">One spot per line. Claude reads it, keeps your ratings and notes word for word, and fills in what's missing.</p>
+      <div id="pv"></div>
+      <div class="foot"><button type="button" class="btn" id="readBtn">Read my list</button><button type="button" class="btn pri" id="importBtn" disabled>Add to map</button></div>
+    </div>
+  </div>
+</div>
+<div class="scrim" id="passScrim" hidden>
+  <form class="sheet" id="passForm" style="width:min(420px,100%)" autocomplete="off">
+    <div class="sh"><h2>Join the map</h2><button type="button" class="ib x" id="passClose" aria-label="Close"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <p class="hint" id="passIntro" style="margin:0 0 4px">Add your first name so friends know who added what. You only do this once on this phone.</p>
+    <div class="grid">
+      <label class="f full" id="passRow">Group passcode<input class="in" id="passIn" autocapitalize="characters" spellcheck="false"></label>
+      <label class="f full">Your first name<input class="in" id="nameIn" maxlength="30" placeholder="Shown as “Added by …”"></label>
+    </div>
+    <p class="hint" id="passHint"></p>
+    <div class="foot"><button class="btn pri" id="passBtn">Unlock</button></div>
+  </form>
+</div>
+<datalist id="cuisList"></datalist>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+{
+/* ---------- geography (1 unit ≈ 100 m; heights exaggerated) ---------- */
+const LAT0 = 41.885, LNG0 = -87.635, KX = 829, KZ = 1110;
+const toXZ = (lat, lng) => [(lng - LNG0) * KX, -(lat - LAT0) * KZ];
+const toLL = (x, z) => [LAT0 - z / KZ, LNG0 + x / KX];
+const P = (lat, lng) => toXZ(lat, lng);
+const PL = arr => arr.map(([a, b]) => P(a, b));
+
+const SHORE = PL([[42.07,-87.676],[42.0228,-87.6655],[42.010,-87.6625],[41.998,-87.6550],[41.985,-87.6520],[41.972,-87.6440],[41.963,-87.6320],[41.955,-87.6345],[41.940,-87.6355],[41.925,-87.6300],[41.915,-87.6245],[41.9105,-87.626],[41.903,-87.6245],[41.9005,-87.6215],[41.8975,-87.616],[41.8925,-87.613],[41.8888,-87.6125],[41.884,-87.6155],[41.876,-87.6165],[41.870,-87.616],[41.8665,-87.6135],[41.864,-87.608],[41.860,-87.612],[41.852,-87.610],[41.845,-87.606],[41.832,-87.605],[41.812,-87.591],[41.796,-87.5735],[41.786,-87.5760],[41.772,-87.5660],[41.760,-87.5520],[41.748,-87.5395],[41.734,-87.5285],[41.7085,-87.5245],[41.66,-87.46],[41.62,-87.35]]);
+const MAIN = PL([[41.8888,-87.6125],[41.8887,-87.624],[41.8880,-87.630],[41.8869,-87.6375]]);
+const NORTH = PL([[41.8869,-87.6375],[41.8915,-87.6395],[41.896,-87.6425],[41.901,-87.647],[41.905,-87.651],[41.912,-87.657],[41.925,-87.665],[41.937,-87.676],[41.950,-87.684],[41.962,-87.697],[41.969,-87.705],[41.980,-87.722],[41.992,-87.742],[42.005,-87.757],[42.03,-87.785]]);
+const CHANNEL = PL([[41.969,-87.705],[41.985,-87.707],[42.000,-87.709],[42.019,-87.709],[42.05,-87.703]]);
+const SOUTH = PL([[41.8869,-87.6375],[41.880,-87.6378],[41.872,-87.6382],[41.8665,-87.6375],[41.858,-87.637],[41.851,-87.645],[41.8465,-87.660],[41.8395,-87.680],[41.832,-87.700],[41.8225,-87.720],[41.815,-87.745],[41.808,-87.780],[41.80,-87.84]]);
+const CALUMET = PL([[41.7310,-87.5300],[41.7210,-87.5390],[41.7060,-87.5520],[41.6900,-87.5620],[41.6750,-87.5720],[41.6600,-87.5840],[41.6500,-87.6000],[41.6480,-87.6300],[41.650,-87.67]]);
+const RIVERS = [MAIN, NORTH, CHANNEL, SOUTH, CALUMET];
+const LAKECAL = PL([[41.700,-87.585],[41.700,-87.571],[41.690,-87.566],[41.672,-87.568],[41.665,-87.578],[41.672,-87.592],[41.688,-87.593]]);
+/* Stylized city limits (clockwise from the north lakefront). Holes like Lincolnwood and Evergreen Park are cut around, not modeled exactly. */
+const CITY = PL([[42.0228,-87.40],[42.0228,-87.6655],[42.0190,-87.6700],[42.0190,-87.7090],[41.9975,-87.7090],[41.9975,-87.7480],[42.0120,-87.7480],[42.0120,-87.7900],[42.0225,-87.8030],[42.0225,-87.8250],[41.9900,-87.8370],[41.9900,-87.8800],[42.0080,-87.8800],[42.0080,-87.9200],[41.9900,-87.9400],[41.9550,-87.9400],[41.9550,-87.8850],[41.9750,-87.8750],[41.9750,-87.8370],[41.9520,-87.8370],[41.9520,-87.8065],[41.9095,-87.8065],[41.9095,-87.7745],[41.8660,-87.7745],[41.8660,-87.7435],[41.8230,-87.7435],[41.8230,-87.8015],[41.7750,-87.8015],[41.7750,-87.7435],[41.7360,-87.7435],[41.7360,-87.6845],[41.7140,-87.6845],[41.7140,-87.6990],[41.7068,-87.6990],[41.7068,-87.7155],[41.7140,-87.7155],[41.7140,-87.7225],[41.6775,-87.7225],[41.6775,-87.6430],[41.6630,-87.6430],[41.6630,-87.6200],[41.6445,-87.6200],[41.6445,-87.5245],[41.7085,-87.5245],[41.7085,-87.40]]);
+/* About two square miles of Oak Lawn: Pulaski to Cicero, 95th to 111th, along Mount Greenwood's west edge */
+const OAK = PL([[41.7215,-87.7435],[41.7215,-87.7225],[41.6921,-87.7225],[41.6921,-87.7435]]);
+const box = (lat1, lat2, lng1, lng2) => { const [x1, z1] = toXZ(lat2, lng1), [x2, z2] = toXZ(lat1, lng2); return [x1, z1, x2, z2]; };
+const inBox = (b, x, z) => x > b[0] && x < b[2] && z > b[1] && z < b[3];
+const PARKS = [box(41.788,41.803,-87.623,-87.607), box(41.899,41.909,-87.708,-87.698), box(41.880,41.888,-87.722,-87.713), box(41.858,41.866,-87.705,-87.695), box(41.766,41.775,-87.705,-87.690), box(41.871,41.879,-87.775,-87.766), box(41.775,41.795,-87.592,-87.54), box(41.7855,41.7885,-87.607,-87.592)];
+const AIRPORTS = [box(41.958,42.002,-87.935,-87.885), box(41.778,41.792,-87.765,-87.741)];
+const WP = MAIN[MAIN.length - 1];
+const MICH = toXZ(LAT0, -87.6244)[0];
+const FINE = { x0: -40, x1: 34, z0: -44, z1: 44 };
+
+function interp(pts, key, val, out) {
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1], lo = Math.min(a[key], b[key]), hi = Math.max(a[key], b[key]);
+    if (val >= lo && val <= hi && hi > lo) { const t = (val - a[key]) / (b[key] - a[key]); return a[out] + (b[out] - a[out]) * t; }
+  }
+  const first = pts[0], last = pts[pts.length - 1];
+  return Math.abs(val - first[key]) < Math.abs(val - last[key]) ? first[out] : last[out];
+}
+const shoreX = z => interp(SHORE, 1, z, 0);
+const mainZ = x => x <= WP[0] ? WP[1] : interp(MAIN, 0, x, 1);
+const northX = z => z >= WP[1] ? WP[0] : interp(NORTH, 1, z, 0);
+const southX = z => z <= WP[1] ? WP[0] : interp(SOUTH, 1, z, 0);
+function segDist(px, pz, a, b) { const dx = b[0]-a[0], dz = b[1]-a[1], l = dx*dx + dz*dz; let t = l ? ((px-a[0])*dx + (pz-a[1])*dz) / l : 0; t = Math.max(0, Math.min(1, t)); return Math.hypot(px - a[0] - t*dx, pz - a[1] - t*dz); }
+function lineDist(x, z, pts) { let m = 1e9; for (let i = 0; i < pts.length - 1; i++) m = Math.min(m, segDist(x, z, pts[i], pts[i+1])); return m; }
+const riverDist = (x, z) => Math.min(...RIVERS.map(r => lineDist(x, z, r)));
+function pointIn(poly, x, z) { let c = false; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const [xi, zi] = poly[i], [xj, zj] = poly[j]; if ((zi > z) !== (zj > z) && x < (xj - xi) * (z - zi) / (zj - zi) + xi) c = !c; } return c; }
+const inCity = (x, z) => pointIn(CITY, x, z);
+const inOak = (x, z) => pointIn(OAK, x, z);
+const zOf = lat => toXZ(lat, LNG0)[1];
+const Z_CONGRESS = zOf(41.8756), Z_RANDOLPH = zOf(41.8845), Z_ROOSEVELT = zOf(41.8674), Z_CHICAGO = zOf(41.8966), Z_GRAND = zOf(41.8917), Z_NORTHAVE = zOf(41.9105);
+function parkW(z) { const lat = LAT0 - z / KZ; if (lat > 41.9105 && lat < 41.94) return 6; if (lat >= 41.94 && lat < 41.9855) return 3.2; if (lat < 41.8674 && lat > 41.79) return 1.6; return 0; }
+
+function coreDistrict(x, z) {
+  if (x < -26 || x > 34 || z < -32 || z > 37) return null;
+  const north = z < mainZ(x);
+  if (north && x > northX(z)) { if (z < Z_NORTHAVE) return null; if (z < Z_CHICAGO - 0.2) return 'Gold Coast'; return x > MICH ? 'Streeterville' : 'River North'; }
+  if (north) return z > Z_GRAND - 0.5 ? 'West Loop' : null;
+  if (x > southX(z)) return z > Z_CONGRESS ? (z < 36 ? 'South Loop' : null) : 'Loop';
+  return z < Z_CONGRESS ? 'West Loop' : null;
+}
+function district(x, z) {
+  if (x > shoreX(z) - 0.15) return 'lake';
+  if (riverDist(x, z) < 0.32 || pointIn(LAKECAL, x, z)) return 'river';
+  if (!inCity(x, z)) return inOak(x, z) ? 'oaklawn' : 'out';
+  for (const a of AIRPORTS) if (inBox(a, x, z)) return 'airport';
+  for (const p of PARKS) if (inBox(p, x, z)) return 'park';
+  const pw = parkW(z);
+  if (pw && x > shoreX(z) - pw) return 'park';
+  if (x > MICH && z > Z_RANDOLPH && z < Z_ROOSEVELT) return 'park';
+  const c = coreDistrict(x, z); if (c) return c;
+  const lat = LAT0 - z / KZ;
+  if (shoreX(z) - x < pw + 3.2 && ((lat > 41.925 && lat < 42.02) || (lat > 41.76 && lat < 41.81))) return 'lakefront';
+  return 'outer';
+}
+
+/* Every community area (77) plus the neighborhood names people actually use. Tier: 3 always labeled, 2 labeled when near, 1 labeled up close, 0 never labeled (an official name that overlaps a popular one). */
+const HOOD_GROUPS = {
+  'Downtown': [['Loop',41.8815,-87.6300,3],['West Loop',41.8830,-87.6510,3],['Fulton Market',41.8866,-87.6500,1],['Greektown',41.8790,-87.6475,1],['River North',41.8925,-87.6340,3],['River West',41.8900,-87.6480,1],['Streeterville',41.8925,-87.6200,2],['Gold Coast',41.9030,-87.6290,2],['Old Town',41.9100,-87.6380,2],['Goose Island',41.9030,-87.6560,1],['South Loop',41.8680,-87.6260,3],["Printer's Row",41.8735,-87.6290,1],['Near North Side',41.9000,-87.6340,0],['Near West Side',41.8770,-87.6650,0],['Near South Side',41.8580,-87.6200,0]],
+  'North Side': [['Rogers Park',42.0095,-87.6700,3],['West Ridge',41.9995,-87.6925,2],['Edgewater',41.9870,-87.6610,2],['Andersonville',41.9800,-87.6690,2],['Uptown',41.9665,-87.6555,3],['Lincoln Square',41.9690,-87.6890,2],['Ravenswood',41.9700,-87.6740,1],['North Center',41.9540,-87.6810,2],['Roscoe Village',41.9430,-87.6800,1],['Lake View',41.9430,-87.6540,3],['Wrigleyville',41.9480,-87.6560,2],['Boystown',41.9420,-87.6490,1],['Lincoln Park',41.9215,-87.6485,3]],
+  'Northwest Side': [['Edison Park',42.0080,-87.8135,2],['Norwood Park',41.9850,-87.8005,2],['Jefferson Park',41.9700,-87.7630,2],['Forest Glen',41.9920,-87.7550,1],['Sauganash',41.9890,-87.7450,1],['Edgebrook',41.9980,-87.7650,1],['North Park',41.9800,-87.7200,1],['Albany Park',41.9685,-87.7220,2],['Portage Park',41.9570,-87.7650,2],['Irving Park',41.9530,-87.7360,2],['Dunning',41.9450,-87.8070,1],['Montclare',41.9255,-87.7990,1],['Belmont Cragin',41.9310,-87.7680,2],['Hermosa',41.9200,-87.7340,1],['Avondale',41.9390,-87.7110,2],['Logan Square',41.9235,-87.7010,3],['Bucktown',41.9210,-87.6800,2],['Galewood',41.9150,-87.7940,1],["O'Hare",41.9760,-87.9050,0]],
+  'West Side': [['Wicker Park',41.9090,-87.6780,3],['Ukrainian Village',41.8990,-87.6840,1],['West Town',41.8960,-87.6650,1],['Humboldt Park',41.9010,-87.7210,3],['Austin',41.8940,-87.7650,2],['West Garfield Park',41.8800,-87.7290,1],['East Garfield Park',41.8810,-87.7020,2],['Little Italy',41.8690,-87.6600,2],['North Lawndale',41.8600,-87.7180,2],['Little Village',41.8440,-87.7140,3],['South Lawndale',41.8440,-87.7140,0],['Pilsen',41.8560,-87.6600,3],['Lower West Side',41.8545,-87.6650,0],['Heart of Chicago',41.8510,-87.6840,1]],
+  'South Side': [['Chinatown',41.8520,-87.6330,3],['Armour Square',41.8400,-87.6330,1],['Bridgeport',41.8380,-87.6510,3],['Canaryville',41.8120,-87.6400,1],['Bronzeville',41.8230,-87.6170,3],['Douglas',41.8350,-87.6180,1],['Oakland',41.8235,-87.6035,1],['Fuller Park',41.8090,-87.6325,1],['Grand Boulevard',41.8135,-87.6175,1],['Kenwood',41.8095,-87.5970,2],['Washington Park',41.7930,-87.6180,1],['Hyde Park',41.7940,-87.5930,3],['Woodlawn',41.7785,-87.5965,2],['South Shore',41.7630,-87.5770,3],['Greater Grand Crossing',41.7610,-87.6150,1],['Chatham',41.7405,-87.6125,2],['Avalon Park',41.7455,-87.5865,1],['Englewood',41.7790,-87.6450,2],['West Englewood',41.7780,-87.6670,1],['Auburn Gresham',41.7430,-87.6560,2]],
+  'Southwest Side': [['McKinley Park',41.8310,-87.6730,2],['Brighton Park',41.8190,-87.6990,2],['Back of the Yards',41.8070,-87.6560,2],['New City',41.8070,-87.6560,0],['Archer Heights',41.8110,-87.7270,1],['Garfield Ridge',41.7960,-87.7700,2],['West Elsdon',41.7940,-87.7240,1],['Gage Park',41.7950,-87.6960,1],['Clearing',41.7800,-87.7690,1],['West Lawn',41.7730,-87.7230,1],['Chicago Lawn',41.7750,-87.6960,2],['Marquette Park',41.7710,-87.6980,0],['Ashburn',41.7480,-87.7100,2]],
+  'Far South Side': [['Beverly',41.7140,-87.6760,3],['Washington Heights',41.7160,-87.6510,1],['Mount Greenwood',41.6960,-87.7080,3],['Morgan Park',41.6900,-87.6680,2],['Roseland',41.7135,-87.6235,2],['Pullman',41.6990,-87.6080,2],['West Pullman',41.6770,-87.6380,1],['Riverdale',41.6560,-87.6050,1],['Burnside',41.7285,-87.5970,1],['Calumet Heights',41.7285,-87.5790,1],['South Chicago',41.7400,-87.5545,2],['South Deering',41.6960,-87.5640,1],['East Side',41.7080,-87.5350,2],['Hegewisch',41.6600,-87.5460,2]],
+  'Suburbs': [['Oak Lawn',41.7068,-87.7330,3]]
+};
+const HOODS = [];
+for (const [side, list] of Object.entries(HOOD_GROUPS)) for (const [name, lat, lng, tier] of list) HOODS.push({ name, lat, lng, tier, side });
+HOODS.push({ name: 'Elsewhere', lat: 41.8600, lng: -87.8000, tier: 0, side: '' });
+const HOOD = Object.fromEntries(HOODS.map(h => [h.name, h]));
+function nearestHood(lat, lng) {
+  const [x, z] = toXZ(lat, lng);
+  if (!inCity(x, z) && !inOak(x, z)) return 'Elsewhere';
+  let best = 'Elsewhere', bd = 1e9;
+  for (const h of HOODS) { if (!h.tier && h.name !== "O'Hare") continue; const [hx, hz] = toXZ(h.lat, h.lng), d = (hx - x) ** 2 + (hz - z) ** 2; if (d < bd) { bd = d; best = h.name; } }
+  return best;
+}
+const TYPES = { Food: '#ff3d3d', Bar: '#41b6e6', Coffee: '#ffb547', Sweets: '#ff7ac6' };
+
+/* ---------- helpers ---------- */
+const $ = s => document.querySelector(s);
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+function hashStr(s) { let h = 2166136261; for (const ch of String(s)) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); } return h >>> 0; }
+function rng(seed) { let a = seed >>> 0; return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const isTouch = matchMedia('(pointer: coarse)').matches;
+const MEM = {};
+const store = (k, v) => { try { if (v === undefined) { const r = localStorage.getItem('cfm:' + k); return r === null ? (MEM[k] ?? null) : JSON.parse(r); } MEM[k] = v; localStorage.setItem('cfm:' + k, JSON.stringify(v)); } catch { if (v === undefined) return MEM[k] ?? null; MEM[k] = v; } };
+let toastT;
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), 2600); }
+
+/* ---------- renderer / scene ---------- */
+const stage = $('#stage');
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio || 1, isTouch ? 1.5 : 1.75));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+stage.appendChild(renderer.domElement);
+
+const labelRenderer = new CSS2DRenderer();
+labelRenderer.setSize(innerWidth, innerHeight);
+labelRenderer.domElement.className = 'lbls';
+document.body.insertBefore(labelRenderer.domElement, stage.nextSibling);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#070b12');
+scene.fog = new THREE.Fog('#070b12', 75, 200);
+
+const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, 0.1, 1600);
+const HOME = { pos: new THREE.Vector3(20, 34, 46), target: new THREE.Vector3(1, 0, -2) };
+const CITYVIEW = { pos: new THREE.Vector3(110, 430, 400), target: new THREE.Vector3(-45, 0, 55) };
+camera.position.copy(CITYVIEW.pos);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.maxPolarAngle = 1.38;
+controls.minDistance = 4;
+controls.maxDistance = 640;
+controls.target.copy(CITYVIEW.target);
+controls.screenSpacePanning = false;
+controls.zoomSpeed = 1.2;
+
+const hemi = new THREE.HemisphereLight('#4a6a9c', '#0a0e14', 0.7);
+scene.add(hemi);
+const moon = new THREE.DirectionalLight('#b9ccff', 0.95);
+moon.castShadow = true;
+moon.shadow.mapSize.set(2048, 2048);
+Object.assign(moon.shadow.camera, { left: -50, right: 50, top: 50, bottom: -50, near: 1, far: 220 });
+moon.shadow.bias = -0.0005;
+scene.add(moon, moon.target);
+const warm = new THREE.DirectionalLight('#ffb070', 0.35);
+warm.position.set(30, 20, 40);
+scene.add(warm);
+
+let composer = null, bloomPass = null;
+try {
+  composer = new EffectComposer(renderer);
+  composer.addPass(new RenderPass(scene, camera));
+  bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.5, 0.5, 0.8);
+  composer.addPass(bloomPass);
+  composer.addPass(new OutputPass());
+} catch (e) { composer = null; }
+
+/* ---------- ground, water, parks, streets ---------- */
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(1800, 1800), new THREE.MeshStandardMaterial({ color: '#080b10', roughness: 1 }));
+ground.rotation.x = -Math.PI / 2;
+ground.position.set(-80, 0, 60);
+ground.receiveShadow = true;
+scene.add(ground);
+const grid = new THREE.GridHelper(1200, 750, '#192534', '#131c27');
+grid.position.set(-80, 0.006, 60.8);
+scene.add(grid);
+
+const SHAPE_MATS = {};
+function flatShape(pts, color, y, opts = {}) {
+  const s = new THREE.Shape();
+  pts.forEach(([x, z], i) => i ? s.lineTo(x, -z) : s.moveTo(x, -z));
+  const m = new THREE.Mesh(new THREE.ShapeGeometry(s), new THREE.MeshStandardMaterial({ color, roughness: opts.rough ?? 0.9, metalness: opts.metal ?? 0, emissive: opts.emissive ?? '#000000' }));
+  m.rotation.x = -Math.PI / 2; m.position.y = y; m.receiveShadow = true;
+  (SHAPE_MATS[color] ||= []).push(m.material);
+  scene.add(m); return m;
+}
+flatShape(CITY, '#0f151e', 0.003);
+flatShape(OAK, '#10151c', 0.003);
+const shoreSorted = SHORE.slice().sort((a, b) => a[1] - b[1]);
+flatShape([[shoreSorted[0][0], -900], ...shoreSorted, [shoreSorted[shoreSorted.length - 1][0] + 200, 900], [900, 900], [900, -900]], '#0a2236', 0.03, { rough: 0.25, metal: 0.35, emissive: '#04101c' });
+flatShape(LAKECAL, '#0a2236', 0.03, { rough: 0.25, metal: 0.35, emissive: '#04101c' });
+
+const parkColor = '#11281b';
+const grantZ = SHORE.filter(p => p[1] > Z_RANDOLPH && p[1] < Z_ROOSEVELT).sort((a, b) => a[1] - b[1]);
+flatShape([[MICH + 0.25, Z_RANDOLPH + 0.2], ...grantZ.map(p => [p[0] - 0.2, p[1]]), [shoreX(Z_ROOSEVELT) - 0.2, Z_ROOSEVELT - 0.2], [MICH + 0.25, Z_ROOSEVELT - 0.2]], parkColor, 0.02);
+function lakefrontPark(lat1, lat2) {
+  const zA = zOf(lat2), zB = zOf(lat1), outer = [], inner = [];
+  for (let z = zA; z <= zB; z += 0.8) { const sx = shoreX(z), w = parkW(z) || parkW(z - 0.5) || parkW(z + 0.5); outer.push([sx - 0.15, z]); inner.push([sx - w, z]); }
+  flatShape([...outer, ...inner.reverse()], parkColor, 0.02);
+}
+lakefrontPark(41.9107, 41.9853); lakefrontPark(41.7902, 41.8672);
+for (const b of PARKS) { const pts = []; for (let z = b[1]; z <= b[3] + 0.01; z += Math.max(0.4, (b[3] - b[1]) / 10)) pts.push([Math.min(b[2], shoreX(z) - 0.15), z]); flatShape([[b[0], b[1]], ...pts, [b[0], b[3]]], parkColor, 0.02); }
+for (const b of AIRPORTS) flatShape([[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]], '#141b24', 0.015);
+
+const RIB = new Map();
+function ribbon(pts, width, mat, y, joints = true) {
+  if (!RIB.has(mat)) RIB.set(mat, []);
+  const list = RIB.get(mat);
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [ax, az] = pts[i], [bx, bz] = pts[i + 1], len = Math.hypot(bx - ax, bz - az);
+    if (len < 0.01) continue;
+    const g = new THREE.PlaneGeometry(len, width);
+    g.rotateX(-Math.PI / 2); g.rotateY(-Math.atan2(bz - az, bx - ax)); g.translate((ax + bx) / 2, y, (az + bz) / 2);
+    list.push(g);
+    if (joints) { const c = new THREE.CircleGeometry(width / 2, 12); c.rotateX(-Math.PI / 2); c.translate(bx, y, bz); list.push(c); }
+  }
+}
+function flushRibbons() {
+  for (const [mat, geos] of RIB) {
+    if (!geos.length) continue;
+    let merged = null; try { merged = mergeGeometries(geos); } catch (e) { merged = null; }
+    if (merged) { const m = new THREE.Mesh(merged, mat); m.receiveShadow = mat.isMeshStandardMaterial === true; scene.add(m); geos.forEach(g => g.dispose && g.dispose()); }
+    else geos.forEach(g => scene.add(new THREE.Mesh(g, mat)));
+  }
+  RIB.clear();
+}
+const riverMat = new THREE.MeshStandardMaterial({ color: '#1f7fb5', emissive: '#41b6e6', emissiveIntensity: 0.55, roughness: 0.3, metalness: 0.2 });
+RIVERS.forEach(r => ribbon(r, r === CALUMET ? 0.9 : 0.62, riverMat, 0.035));
+ribbon(shoreSorted.filter(p => p[1] > -170 && p[1] < 280).map(([x, z]) => [x - 0.05, z]), 0.12, new THREE.MeshBasicMaterial({ color: '#7fd3f2' }), 0.04);
+const limitMat = new THREE.MeshBasicMaterial({ color: '#e8f1fb', transparent: true, opacity: 0.3, depthWrite: false });
+{ const edge = []; for (let i = 0; i <= CITY.length; i++) { const p = CITY[i % CITY.length]; const inLake = p[0] > shoreX(p[1]) + 0.5; if (!inLake) edge.push(p); else if (edge.length) { ribbon(edge.splice(0), 0.16, limitMat, 0.02); } } if (edge.length > 1) ribbon(edge, 0.16, limitMat, 0.02); }
+ribbon([...OAK, OAK[0]], 0.14, new THREE.MeshBasicMaterial({ color: '#ffb547', transparent: true, opacity: 0.45, depthWrite: false }), 0.021);
+const runwayMat = new THREE.MeshBasicMaterial({ color: '#c9d6e6', transparent: true, opacity: 0.35, depthWrite: false });
+{ const [o0, o1, o2, o3] = AIRPORTS[0]; for (const f of [0.22, 0.4, 0.62, 0.8]) ribbon([[o0 + 3, o1 + (o3 - o1) * f], [o2 - 3, o1 + (o3 - o1) * f]], 0.3, runwayMat, 0.02, false);
+  ribbon([[o0 + 6, o3 - 4], [o2 - 8, o1 + 6]], 0.3, runwayMat, 0.02, false);
+  const [m0, m1, m2, m3] = AIRPORTS[1]; ribbon([[m0 + 1, m1 + 1], [m2 - 1, m3 - 1]], 0.25, runwayMat, 0.02, false); ribbon([[m0 + 1, m3 - 1], [m2 - 1, m1 + 1]], 0.25, runwayMat, 0.02, false); }
+const pier = new THREE.Mesh(new THREE.BoxGeometry(toXZ(41.892, -87.600)[0] - toXZ(41.892, -87.6135)[0], 0.18, 0.32), new THREE.MeshStandardMaterial({ color: '#1e2a38', emissive: '#ffb070', emissiveIntensity: 0.12 }));
+{ const a = toXZ(41.892, -87.6135), b = toXZ(41.892, -87.600); pier.position.set((a[0] + b[0]) / 2, 0.09, a[1]); scene.add(pier); }
+const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.04, 8, 32), new THREE.MeshBasicMaterial({ color: '#ffd28a' }));
+{ const p = toXZ(41.8915, -87.6075); wheel.position.set(p[0], 0.6, p[1] - 0.05); scene.add(wheel); }
+
+const streetMat = new THREE.MeshBasicMaterial({ color: '#ff9e45', transparent: true, opacity: 0.3, depthWrite: false });
+const roadOK = (x, z) => { const d = district(x, z); return d !== 'lake' && d !== 'out' && d !== 'airport' && d !== 'park'; };
+function street(ax, az, bx, bz) {
+  const len = Math.hypot(bx - ax, bz - az), n = Math.ceil(len / 1.2); let run = null, last = null;
+  const flush = () => { if (run && last && Math.hypot(last[0] - run[0], last[1] - run[1]) > 0.5) ribbon([run, last], 0.1, streetMat, 0.012, false); run = null; };
+  for (let i = 0; i <= n; i++) { const t = i / n, x = ax + (bx - ax) * t, z = az + (bz - az) * t; if (roadOK(x, z)) { if (!run) run = [x, z]; last = [x, z]; } else flush(); }
+  flush();
+}
+const Z_N = zOf(42.03), Z_S = zOf(41.64), X_W = toXZ(LAT0, -87.945)[0], X_E = toXZ(LAT0, -87.52)[0];
+for (const lng of [-87.6278, -87.6473, -87.6667, -87.6845, -87.7058, -87.7225, -87.7435, -87.7655, -87.8065, -87.6060, -87.5865]) { const x = toXZ(LAT0, lng)[0]; street(x, Z_N, x, Z_S); }
+for (const lat of [42.0190, 41.9980, 41.9760, 41.9686, 41.9540, 41.9395, 41.9249, 41.9105, 41.8966, 41.8820, 41.8674, 41.8528, 41.8383, 41.8236, 41.8091, 41.7946, 41.7799, 41.7654, 41.7509, 41.7360, 41.7215, 41.7068, 41.6921, 41.6775]) { const z = zOf(lat); street(X_W, z, X_E, z); }
+{ const pts = []; for (let z = zOf(41.9855); z <= zOf(41.773); z += 1.5) { const pw = parkW(z); pts.push([shoreX(z) - (pw ? pw + 0.3 : 0.55), z]); } ribbon(pts, 0.13, streetMat, 0.013, false); }
+flushRibbons();
+
+/* ---------- buildings with lit windows ---------- */
+const WXU = { uWin: { value: 1 }, uDay: { value: 0 } };
+function buildingMat(color) {
+  const m = new THREE.MeshStandardMaterial({ color, roughness: 0.82, metalness: 0.12 });
+  m.onBeforeCompile = sh => {
+    sh.uniforms.uWin = WXU.uWin; sh.uniforms.uDay = WXU.uDay;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNrm;')
+      .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
+        vec4 cmP = vec4(transformed, 1.0);
+        vec3 cmN = objectNormal;
+        #ifdef USE_INSTANCING
+          cmP = instanceMatrix * cmP;
+          cmN = mat3(instanceMatrix) * cmN;
+        #endif
+        cmP = modelMatrix * cmP;
+        vWPos = cmP.xyz;
+        vWNrm = normalize(mat3(modelMatrix) * cmN);`);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNrm;\nuniform float uWin;\nuniform float uDay;\nfloat cmHash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }')
+      .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 2.3 + vec3(0.07, 0.075, 0.085), uDay);')
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        {
+          float side = 1.0 - step(0.6, abs(vWNrm.y));
+          float u = abs(vWNrm.x) > 0.5 ? vWPos.z : vWPos.x;
+          vec2 g = vec2(u / 0.15, vWPos.y / 0.19);
+          vec2 cell = floor(g); vec2 f = fract(g);
+          float win = step(0.2, f.x) * step(f.x, 0.8) * step(0.28, f.y) * step(f.y, 0.78);
+          float h = cmHash(cell + vec2(floor(vWPos.x * 0.9 + vWPos.z * 0.37) * 17.0, 3.0));
+          float lit = step(0.66, h);
+          float tint = cmHash(cell * 1.7 + 9.0);
+          vec3 wc = mix(vec3(1.0, 0.74, 0.42), vec3(0.78, 0.88, 1.0), step(0.72, tint));
+          float base = step(0.14, vWPos.y);
+          totalEmissiveRadiance += wc * win * lit * side * base * 0.75 * uWin;
+          totalEmissiveRadiance += vec3(0.012, 0.018, 0.03) * side;
+        }`);
+  };
+  return m;
+}
+const TINT = { 'Loop': '#34414f', 'River North': '#2f3a49', 'Streeterville': '#334050', 'West Loop': '#3a3533', 'Gold Coast': '#323b47', 'South Loop': '#2f3946', lakefront: '#303b48', outer: '#262e38', oaklawn: '#2a2f37' };
+const HGT = {
+  'Loop': r => 1.4 + r ** 2.1 * 7.5, 'River North': r => 0.9 + r ** 2.2 * 6, 'Streeterville': r => 1.2 + r ** 1.8 * 7,
+  'West Loop': (r, x) => 0.45 + r ** 3 * (x > -9 ? 6 : 3.2), 'Gold Coast': r => 0.8 + r ** 2.2 * 5.5, 'South Loop': r => 0.9 + r ** 2.2 * 5,
+  lakefront: r => 0.9 + r ** 2 * 4.2, outer: r => 0.25 + r ** 2 * 1.1, oaklawn: r => 0.22 + r ** 2 * 0.7
+};
+
+/* ---------- labels ---------- */
+const LABELS = [];
+function addLabel(text, cls, x, y, z, tier = 3) {
+  const el = document.createElement('div'); el.className = 'lbl ' + cls; el.textContent = text;
+  const o = new CSS2DObject(el); o.position.set(x, y, z); o.userData.tier = tier; scene.add(o); LABELS.push(o); return o;
+}
+
+const LANDMARKS = [];
+const lots = [];
+function landmark(name, lat, lng, parts, lbl, color = '#3b4859') {
+  const [x, z] = toXZ(lat, lng), mat = buildingMat(color), g = new THREE.Group();
+  let top = 0, rx = 0.4, rz = 0.4;
+  for (const p of parts) {
+    let geo;
+    if (p.cyl) { geo = new THREE.CylinderGeometry(p.rt, p.rb, p.h, p.seg || 20); geo.translate(0, p.h / 2, 0); if (p.seg === 4) geo.rotateY(Math.PI / 4); rx = Math.max(rx, p.rb + Math.abs(p.ox || 0)); rz = Math.max(rz, p.rb); }
+    else { geo = new THREE.BoxGeometry(p.w, p.h, p.d); geo.translate(0, p.h / 2, 0); rx = Math.max(rx, p.w / 2 + Math.abs(p.ox || 0)); rz = Math.max(rz, p.d / 2 + Math.abs(p.oz || 0)); }
+    const m = new THREE.Mesh(geo, p.mast ? new THREE.MeshBasicMaterial({ color: '#ff4a4a' }) : p.mat || mat);
+    m.position.set(x + (p.ox || 0), p.y || 0, z + (p.oz || 0));
+    m.castShadow = m.receiveShadow = !p.mast;
+    g.add(m); top = Math.max(top, (p.y || 0) + p.h);
+  }
+  scene.add(g);
+  LANDMARKS.push({ name, x, z, rx: rx + 0.35, rz: rz + 0.35 });
+  lots.push({ x, z, h: top });
+  if (lbl) addLabel(lbl, 'lm', x, top + 0.6, z, 2);
+}
+const W = 0.21;
+landmark('Willis Tower', 41.8789, -87.6359, [
+  { w: W * 3, h: 5.1, d: W * 3 }, { w: W * 3, h: 1.7, d: W * 2, y: 5.1, oz: -W / 2 }, { w: W * 2, h: 2.4, d: W * 2, y: 6.8, ox: W / 2, oz: -W / 2 },
+  { w: W, h: 2.0, d: W * 2, y: 9.2, ox: W, oz: -W / 2 }, { cyl: 1, rt: 0.02, rb: 0.03, h: 1.9, y: 11.2, mast: 1, ox: W, oz: -W }, { cyl: 1, rt: 0.02, rb: 0.03, h: 1.7, y: 11.2, mast: 1, ox: W, oz: 0 }
+], 'Willis Tower');
+landmark('875 N Michigan', 41.8988, -87.6229, [{ cyl: 1, rt: 0.27, rb: 0.46, h: 8.6, seg: 4 }, { cyl: 1, rt: 0.02, rb: 0.03, h: 1.6, y: 8.6, mast: 1, ox: -0.08 }, { cyl: 1, rt: 0.02, rb: 0.03, h: 1.6, y: 8.6, mast: 1, ox: 0.08 }], 'Hancock');
+landmark('Trump Tower', 41.8890, -87.6264, [{ w: 0.62, h: 3, d: 0.38 }, { w: 0.5, h: 2.6, d: 0.32, y: 3 }, { w: 0.36, h: 2.6, d: 0.26, y: 5.6 }, { w: 0.24, h: 1.3, d: 0.2, y: 8.2 }, { cyl: 1, rt: 0.01, rb: 0.04, h: 1.5, y: 9.5, mast: 1 }], 'Trump Tower', '#4a5a6e');
+landmark('Aon Center', 41.8853, -87.6215, [{ w: 0.56, h: 9.1, d: 0.56 }], 'Aon Center', '#3f4d5e');
+landmark('St. Regis', 41.8875, -87.6185, [{ w: 0.36, h: 3.4, d: 0.5 }, { w: 0.36, h: 3.2, d: 0.5, y: 3.4, ox: 0.1 }, { w: 0.36, h: 2.7, d: 0.46, y: 6.6, ox: 0.2 }], 'St. Regis', '#41556a');
+landmark('Merchandise Mart', 41.8885, -87.6352, [{ w: 2.1, h: 1.7, d: 1.1 }, { w: 0.6, h: 0.5, d: 0.5, y: 1.7 }], 'Merchandise Mart', '#3d3a39');
+landmark('Marina City', 41.8880, -87.6290, [{ cyl: 1, rt: 0.2, rb: 0.2, h: 3.3, ox: -0.22 }, { cyl: 1, rt: 0.2, rb: 0.2, h: 3.3, ox: 0.22 }], 'Marina City', '#56606c');
+landmark('Wrigley Building', 41.8895, -87.6248, [{ w: 0.5, h: 2, d: 0.4 }, { w: 0.18, h: 1, d: 0.18, y: 2 }], null, '#8a8f96');
+landmark('Tribune Tower', 41.8904, -87.6235, [{ w: 0.4, h: 2.4, d: 0.4 }, { w: 0.24, h: 0.6, d: 0.24, y: 2.4 }], null, '#5b5752');
+landmark('Bank of America Tower', 41.8865, -87.6365, [{ w: 0.5, h: 5.2, d: 0.5 }, { w: 0.34, h: 1.2, d: 0.34, y: 5.2 }], null, '#3f4d5e');
+const bowlMat = new THREE.MeshStandardMaterial({ color: '#2a3442', roughness: 0.7 });
+const lightsMat = new THREE.MeshBasicMaterial({ color: '#f4f8ff' });
+function stadium(name, lat, lng, r, lbl) {
+  landmark(name, lat, lng, [{ cyl: 1, rt: r, rb: r * 1.08, h: 0.6, seg: 28, mat: bowlMat }], null);
+  const [x, z] = toXZ(lat, lng), ring = new THREE.Mesh(new THREE.TorusGeometry(r * 0.98, 0.045, 6, 40), lightsMat);
+  ring.rotation.x = -Math.PI / 2; ring.position.set(x, 0.66, z); scene.add(ring);
+  const field = new THREE.Mesh(new THREE.CircleGeometry(r * 0.8, 28), new THREE.MeshBasicMaterial({ color: '#1f6b3a' }));
+  field.rotation.x = -Math.PI / 2; field.position.set(x, 0.62, z); scene.add(field);
+  addLabel(lbl, 'lm', x, 1.4, z, 2);
+}
+stadium('Wrigley Field', 41.9484, -87.6553, 0.75, 'Wrigley Field');
+stadium('Sox Park', 41.8299, -87.6338, 0.85, 'Sox Park');
+stadium('Soldier Field', 41.8623, -87.6167, 0.9, 'Soldier Field');
+stadium('United Center', 41.8807, -87.6742, 0.7, 'United Center');
+
+function inLandmark(x, z) { return LANDMARKS.some(l => Math.abs(x - l.x) < l.rx && Math.abs(z - l.z) < l.rz); }
+const inFine = (x, z) => x > FINE.x0 && x < FINE.x1 && z > FINE.z0 && z < FINE.z1;
+
+{ // procedural massing: fine blocks downtown, bungalow-scale blocks citywide
+  const R = rng(1871), all = [], dummy = new THREE.Object3D(), col = new THREE.Color();
+  const cityB = [Math.min(...CITY.map(p => p[0])), Math.min(...CITY.map(p => p[1])), Math.max(...CITY.map(p => p[0])), Math.max(...CITY.map(p => p[1]))];
+  function cell(cx, cz, C, B) {
+    const d = district(cx, cz);
+    if (d === 'lake' || d === 'river' || d === 'park' || d === 'out' || d === 'airport') return;
+    if (riverDist(cx, cz) < 0.95 || shoreX(cz) - cx < 1.2) return;
+    const far = Math.hypot(cx - 0, cz - 0);
+    const nx = R() < 0.55 ? 2 : 1, nz = R() < 0.45 ? 2 : 1, wx = B / nx, wz = B / nz;
+    for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) {
+      const x = cx - B / 2 + wx * (i + 0.5), z = cz - B / 2 + wz * (j + 0.5);
+      if (inLandmark(x, z) || riverDist(x, z) < 0.75) continue;
+      const low = d === 'outer' || d === 'oaklawn';
+      if ((d === 'West Loop' || low) && R() < (low ? 0.25 : 0.14)) continue;
+      let h = (HGT[d] || HGT.outer)(R(), x);
+      if (d === 'outer') h *= Math.max(0.55, 1.25 - far / 110);
+      all.push({ x, z, h, sw: wx - 0.08 - R() * 0.06, sd: wz - 0.08 - R() * 0.06, d });
+    }
+  }
+  for (let gx = FINE.x0; gx < FINE.x1; gx += 1.6) for (let gz = FINE.z0; gz < FINE.z1; gz += 1.6) cell(gx + 0.8, gz + 0.8, 1.6, 1.24);
+  for (let gx = Math.floor(cityB[0] / 2.4) * 2.4; gx < cityB[2]; gx += 2.4) for (let gz = Math.floor(cityB[1] / 2.4) * 2.4; gz < cityB[3]; gz += 2.4) { const cx = gx + 1.2, cz = gz + 1.2; if (!inFine(cx, cz)) cell(cx, cz, 2.4, 1.9); }
+  const geo = new THREE.BoxGeometry(1, 1, 1); geo.translate(0, 0.5, 0);
+  const inst = new THREE.InstancedMesh(geo, buildingMat('#ffffff'), all.length);
+  all.forEach((b, i) => {
+    dummy.position.set(b.x, 0, b.z); dummy.scale.set(b.sw, b.h, b.sd); dummy.updateMatrix();
+    inst.setMatrixAt(i, dummy.matrix);
+    col.set(TINT[b.d] || TINT.outer).offsetHSL(0, 0, (R() - 0.5) * 0.06);
+    inst.setColorAt(i, col);
+    lots.push({ x: b.x, z: b.z, h: b.h });
+  });
+  inst.castShadow = inst.receiveShadow = true;
+  inst.instanceMatrix.needsUpdate = true;
+  if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+  scene.add(inst);
+  window.__lotCount = all.length;
+}
+const lotHash = new Map();
+for (const l of lots) { const k = Math.floor(l.x / 2) + ',' + Math.floor(l.z / 2); if (!lotHash.has(k)) lotHash.set(k, []); lotHash.get(k).push(l); }
+function skylineAt(x, z, r = 0.95) {
+  let m = 0; const ix = Math.floor(x / 2), iz = Math.floor(z / 2);
+  for (let a = ix - 1; a <= ix + 1; a++) for (let b = iz - 1; b <= iz + 1; b++) for (const l of lotHash.get(a + ',' + b) || []) if (Math.abs(l.x - x) < r && Math.abs(l.z - z) < r && l.h > m) m = l.h;
+  return m;
+}
+
+HOODS.filter(h => h.tier).forEach(h => { const [x, z] = toXZ(h.lat, h.lng); addLabel(h.name, 'hood t' + h.tier, x, 0.3, z, h.tier); });
+addLabel('Lake Michigan', 'water', 30, 0.2, -10, 3);
+addLabel('Lake Michigan', 'water', 70, 0.2, 120, 3);
+addLabel('Chicago River', 'water', ...(([x, z]) => [x, 0.2, z])(toXZ(41.8889, -87.6195)), 2);
+addLabel('Calumet River', 'water', ...(([x, z]) => [x, 0.2, z])(toXZ(41.712, -87.548)), 2);
+addLabel('Navy Pier', 'lm', toXZ(41.892, -87.604)[0], 0.9, toXZ(41.892, -87.604)[1], 2);
+addLabel('Grant Park', 'lm', toXZ(41.876, -87.620)[0], 0.4, toXZ(41.876, -87.620)[1], 2);
+addLabel("O'Hare", 'lm', ...(([x, z]) => [x, 0.4, z])(toXZ(41.979, -87.907)), 3);
+addLabel('Midway', 'lm', ...(([x, z]) => [x, 0.4, z])(toXZ(41.785, -87.752)), 3);
+addLabel('Jackson Park', 'lm', ...(([x, z]) => [x, 0.4, z])(toXZ(41.784, -87.580)), 1);
+
+/* ---------- pins ---------- */
+const starShape = new THREE.Shape();
+for (let i = 0; i < 12; i++) { const r = i % 2 ? 0.22 : 0.5, a = Math.PI / 2 + i * Math.PI / 6; const px = Math.cos(a) * r, py = Math.sin(a) * r; i ? starShape.lineTo(px, py) : starShape.moveTo(px, py); }
+const starGeo = new THREE.ExtrudeGeometry(starShape, { depth: 0.12, bevelEnabled: true, bevelThickness: 0.03, bevelSize: 0.03, bevelSegments: 2 });
+starGeo.center();
+const stemGeo = new THREE.CylinderGeometry(0.022, 0.022, 1, 6); stemGeo.translate(0, 0.5, 0);
+const ringGeo = new THREE.RingGeometry(0.26, 0.38, 36); ringGeo.rotateX(-Math.PI / 2);
+const hitGeo = new THREE.SphereGeometry(0.8, 10, 8);
+const beamGeo = new THREE.CylinderGeometry(0.05, 0.12, 1, 12, 1, true); beamGeo.translate(0, 0.5, 0);
+const hitMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
+const PM = {};
+for (const [t, c] of Object.entries(TYPES)) PM[t] = {
+  star: new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 1.6, roughness: 0.35, metalness: 0.1 }),
+  hot: new THREE.MeshStandardMaterial({ color: '#ffffff', emissive: c, emissiveIntensity: 3.2, roughness: 0.3 }),
+  stem: new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.6 }),
+  ring: new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.75, side: THREE.DoubleSide, depthWrite: false }),
+  beam: new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })
+};
+const pinRoot = new THREE.Group(); scene.add(pinRoot);
+const pins = new Map();
+const tagWrap = document.createElement('div'), tagEl = document.createElement('div'); tagEl.className = 'tag'; tagWrap.appendChild(tagEl);
+const tag = new CSS2DObject(tagWrap); tag.center.set(0.5, 1); tag.visible = false; scene.add(tag);
+const beam = new THREE.Mesh(beamGeo, PM.Food.beam); beam.visible = false; scene.add(beam);
+
+function posOf(s) {
+  if (Number.isFinite(s.lat) && Number.isFinite(s.lng)) return toXZ(s.lat, s.lng);
+  const h = HOOD[s.hood] || HOOD.Elsewhere, [x, z] = toXZ(h.lat, h.lng), r = rng(hashStr(s.id + s.name));
+  const a = r() * Math.PI * 2, d = 0.6 + r() * 1.8;
+  return [x + Math.cos(a) * d, z + Math.sin(a) * d];
+}
+function makePin(s) {
+  const m = PM[s.type] || PM.Food, g = new THREE.Group(), [x, z] = posOf(s);
+  const H = Math.min(14, Math.max(2.2, skylineAt(x, z) + 1.5));
+  const stem = new THREE.Mesh(stemGeo, m.stem); stem.scale.y = H; g.add(stem);
+  const star = new THREE.Mesh(starGeo, m.star); star.position.y = H + 0.45; star.castShadow = true; g.add(star);
+  const ring = new THREE.Mesh(ringGeo, m.ring); ring.position.y = 0.06; g.add(ring);
+  const hit = new THREE.Mesh(hitGeo, hitMat); hit.position.y = H + 0.45; hit.userData.id = s.id; g.add(hit);
+  g.position.set(x, 0, z); pinRoot.add(g);
+  return { g, star, ring, hit, H, mats: m, phase: (hashStr(s.id) % 1000) / 160, key: [s.type, s.lat, s.lng, s.hood, s.name].join('|') };
+}
+function syncPins() {
+  const ids = new Set(spots.map(s => s.id));
+  for (const [id, p] of pins) if (!ids.has(id)) { pinRoot.remove(p.g); pins.delete(id); }
+  for (const s of spots) {
+    const key = [s.type, s.lat, s.lng, s.hood, s.name].join('|'), old = pins.get(s.id);
+    if (old && old.key === key) continue;
+    if (old) pinRoot.remove(old.g);
+    pins.set(s.id, makePin(s));
+  }
+}
+const pinTop = id => { const p = pins.get(id); return p ? new THREE.Vector3(p.g.position.x, p.H + 0.3, p.g.position.z) : null; };
+
+/* ---------- camera flights ---------- */
+let flight = null;
+function flyTo(target, dist = 11, dur = 1100, pos = null) {
+  const dir = camera.position.clone().sub(controls.target);
+  if (dir.lengthSq() < 1e-6) dir.set(0.4, 0.7, 0.6);
+  dir.normalize(); dir.y = Math.max(dir.y, 0.55); dir.normalize();
+  const toP = pos ? pos.clone() : target.clone().add(dir.multiplyScalar(dist));
+  flight = { t0: performance.now(), dur: reduced ? 1 : dur, fromP: camera.position.clone(), fromT: controls.target.clone(), toP, toT: target.clone() };
+}
+controls.addEventListener('start', () => { flight = null; });
+const ease = t => t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
+
+/* ---------- state ---------- */
+let spots = [];
+let names = {};
+const ui = { q: '', type: 'All', hood: '', cuisine: '', sort: store('sort') || 'rating', sel: null, hover: null };
+const data = { db: null, user: null, me: null, canWrite: true, mode: 'connecting', backend: 'claude' };
+const GAS = (() => { try { return window.google && google.script && google.script.run ? google.script.run : null; } catch { return null; } })();
+const gasCall = (fn, ...args) => new Promise((res, rej) => google.script.run.withSuccessHandler(res).withFailureHandler(rej)[fn](...args));
+
+function normalize(id, d) {
+  if (!d || typeof d !== 'object') return null;
+  const str = (v, n) => typeof v === 'string' ? v.trim().slice(0, n) : '';
+  const num = v => (typeof v === 'number' && Number.isFinite(v)) ? v : (typeof v === 'string' && v.trim() !== '' && Number.isFinite(+v) ? +v : null);
+  const name = str(d.name, 80); if (!name) return null;
+  let rating = num(d.rating); if (rating !== null) rating = Math.max(0, Math.min(5, Math.round(rating * 10) / 10));
+  const lat = num(d.lat), lng = num(d.lng);
+  const okLL = lat !== null && lng !== null && lat > 41.6 && lat < 42.1 && lng > -88 && lng < -87.5;
+  const hoodIn = str(d.hood, 40), hood = HOOD[hoodIn] ? hoodIn : (okLL ? nearestHood(lat, lng) : (hoodIn || 'Elsewhere'));
+  return { id, name, type: TYPES[d.type] ? d.type : 'Food', hood, cuisine: str(d.cuisine, 40), dish: str(d.dish, 80), rating, notes: str(d.notes, 600), lat: okLL ? lat : null, lng: okLL ? lng : null, address: str(d.address, 120), by: str(d.by, 120), editBy: str(d.editBy, 120), created: num(d.created) || 0, updated: num(d.updated) || 0 };
+}
+function matches(s) {
+  if (ui.type !== 'All' && s.type !== ui.type) return false;
+  if (ui.hood && s.hood !== ui.hood) return false;
+  if (ui.cuisine && s.cuisine.toLowerCase() !== ui.cuisine.toLowerCase()) return false;
+  if (ui.q) { const q = ui.q.toLowerCase(); if (![s.name, s.dish, s.notes, s.cuisine, s.hood, s.type].some(v => v.toLowerCase().includes(q))) return false; }
+  return true;
+}
+function visible() {
+  const v = spots.filter(matches);
+  if (ui.sort === 'near' && ME.pos) return v.sort((a, b) => spotKm(a) - spotKm(b));
+  const by = { rating: (a, b) => (b.rating ?? -1) - (a.rating ?? -1) || a.name.localeCompare(b.name), new: (a, b) => b.created - a.created, az: (a, b) => a.name.localeCompare(b.name), hood: (a, b) => a.hood.localeCompare(b.hood) || a.name.localeCompare(b.name) };
+  return v.sort(by[ui.sort] || by.rating);
+}
+
+/* ---------- rendering UI ---------- */
+const stars = r => `<span class="stars" aria-label="${r === null ? 'Not rated' : esc(r) + ' out of 5'}"><span style="width:${r === null ? 0 : (r / 5) * 100}%"></span></span>`;
+function renderFilters() {
+  const counts = {}; spots.forEach(s => counts[s.type] = (counts[s.type] || 0) + 1);
+  $('#typeChips').innerHTML = ['All', ...Object.keys(TYPES)].map(t => `<button class="chip" data-type="${t}" aria-pressed="${ui.type === t}" style="--c:${TYPES[t] || '#fff'}">${t === 'All' ? '' : '<i></i>'}${t}${t !== 'All' && counts[t] ? ` <span style="opacity:.6">${counts[t]}</span>` : ''}</button>`).join('');
+  const hc = {}; spots.forEach(s => hc[s.hood] = (hc[s.hood] || 0) + 1);
+  const opt = n => `<option value="${esc(n)}" ${n === ui.hood ? 'selected' : ''}>${esc(n)}${hc[n] ? ` (${hc[n]})` : ''}</option>`;
+  const extra = Object.keys(hc).filter(n => !HOOD[n] || n === 'Elsewhere').sort();
+  $('#hoodSel').innerHTML = `<option value="">All neighborhoods</option>` + (Object.keys(hc).length ? `<optgroup label="With spots">${Object.keys(hc).sort().map(opt).join('')}</optgroup>` : '') + Object.entries(HOOD_GROUPS).map(([g, list]) => `<optgroup label="${esc(g)}">${list.map(h => h[0]).sort((a, b) => a.localeCompare(b)).map(opt).join('')}</optgroup>`).join('') + (extra.length ? '' : '');
+  const cs = [...new Map(spots.filter(s => s.cuisine).map(s => [s.cuisine.toLowerCase(), s.cuisine])).values()].sort((a, b) => a.localeCompare(b));
+  $('#cuisSel').innerHTML = `<option value="">All cuisines</option>` + cs.map(c => `<option ${c.toLowerCase() === ui.cuisine.toLowerCase() ? 'selected' : ''}>${esc(c)}</option>`).join('');
+  $('#cuisList').innerHTML = cs.map(c => `<option value="${esc(c)}">`).join('');
+}
+function renderList() {
+  const v = visible();
+  $('#listTitle').textContent = v.length === spots.length ? `${spots.length} spot${spots.length === 1 ? '' : 's'}` : `${v.length} of ${spots.length}`;
+  const people = new Set(spots.map(s => s.by).filter(Boolean)).size;
+  $('#stats').textContent = data.mode === 'connecting' ? 'Loading spots…' : `${spots.length} spot${spots.length === 1 ? '' : 's'}${people > 1 ? ` from ${people} people` : ''}`;
+  if (!spots.length) {
+    $('#rows').innerHTML = data.mode === 'connecting' ? `<li class="empty"><span class="spin"></span></li>` : `<li class="empty"><b>No spots yet</b>${data.canWrite ? 'Add your first one, or paste your whole list at once.' : 'Nobody has added a spot yet.'}</li>`;
+  } else if (!v.length) {
+    $('#rows').innerHTML = `<li class="empty"><b>Nothing matches</b><button class="btn" id="clearF" style="margin-top:10px">Clear filters</button></li>`;
+  } else {
+    $('#rows').innerHTML = v.map(s => `<li class="row ${s.id === ui.sel ? 'on' : ''}" data-id="${esc(s.id)}" tabindex="0" style="--c:${TYPES[s.type]}"><i class="dot"></i><div><b>${esc(s.name)}</b><span>${ME.pos ? `<i class="dist">${fmtDist(spotKm(s))}</i> · ` : ''}${esc(s.hood)}${s.cuisine ? ' · ' + esc(s.cuisine) : ''}</span></div>${s.rating === null ? '<em class="nr">New</em>' : `<em>${s.rating.toFixed(1)}</em>`}</li>`).join('');
+  }
+  for (const [id, p] of pins) p.g.visible = false;
+  v.forEach(s => { const p = pins.get(s.id); if (p) p.g.visible = true; });
+  const selP = ui.sel && pins.get(ui.sel); if (selP) selP.g.visible = true;
+}
+function nameOf(id) { if (!id) return ''; if (data.backend === 'gas') return data.me && id.toLowerCase() === data.me.toLowerCase() ? 'you' : id; if (id === data.me) return 'you'; return names[id] || 'a friend'; }
+function renderCard() {
+  const card = $('#card'), s = spots.find(x => x.id === ui.sel);
+  document.body.classList.toggle('card-open', !!s);
+  if (!s) { card.hidden = true; beam.visible = false; return; }
+  const v = visible(), i = v.findIndex(x => x.id === s.id), maps = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(s.name + ' ' + (s.address || (s.hood + ' Chicago')))}`, waze = Number.isFinite(s.lat) ? `https://waze.com/ul?ll=${s.lat},${s.lng}&navigate=yes` : '';
+  const when = s.updated ? new Date(s.updated).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+  card.style.setProperty('--c', TYPES[s.type]);
+  card.innerHTML = `
+    <div class="top"><span class="badge"><svg width="12" height="12" viewBox="-12 -12 24 24"><path fill="currentColor" d="M0-11 2.9-5 9.5-5.5 5.8 0 9.5 5.5 2.9 5 0 11-2.9 5-9.5 5.5-5.8 0-9.5-5.5-2.9-5Z"/></svg>${esc(s.type)}</span>
+      <div class="nav x">${v.length > 1 && i > -1 ? `<button class="ib" data-act="prev" aria-label="Previous spot">‹</button><button class="ib" data-act="next" aria-label="Next spot">›</button>` : ''}<button class="ib" data-act="close" aria-label="Close">✕</button></div></div>
+    <h3>${esc(s.name)}</h3>
+    <div class="meta">${ME.pos ? `<span class="dist">${fmtDist(spotKm(s))} away</span> · ` : ''}${esc(s.hood)}${s.cuisine ? ' · ' + esc(s.cuisine) : ''}</div>
+    ${s.address ? `<div class="addr">${esc(s.address)}</div>` : ''}
+    <div class="rate">${stars(s.rating)}<b>${s.rating === null ? '<span style="font:500 15px Barlow,system-ui,sans-serif;color:var(--mute)">Not rated yet</span>' : s.rating.toFixed(1)}</b></div>
+    ${s.dish ? `<div class="dish"><small>Favorite dish</small><p>${esc(s.dish)}</p></div>` : ''}
+    ${s.notes ? `<p class="notes">${esc(s.notes)}</p>` : ''}
+    <div class="by">${s.by ? 'Added by ' + esc(nameOf(s.by)) : ''}${s.editBy && s.editBy !== s.by ? ' · edited by ' + esc(nameOf(s.editBy)) : ''}${when ? ' · ' + esc(when) : ''}</div>
+    <div class="acts"><a class="btn" href="${maps}" target="_blank" rel="noopener">Directions</a>${waze ? `<a class="btn" href="${waze}" target="_blank" rel="noopener">Waze</a>` : ''}${data.canWrite ? `<button class="btn" data-act="edit">Edit</button><button class="btn warn" data-act="del">Delete</button>` : ''}</div>`;
+  card.hidden = false;
+  const p = pins.get(s.id);
+  if (p) { beam.material = p.mats.beam; beam.position.set(p.g.position.x, p.H + 0.6, p.g.position.z); beam.scale.y = 40; beam.visible = true; }
+}
+function setStatus() {
+  const el = $('#status'), txt = { connecting: 'Connecting…', live: data.backend === 'gas' ? 'Live · updates every few seconds' : 'Live · shared with everyone on this link', cached: 'Showing saved copy · reconnecting', slow: "Can't reach shared spots yet", local: 'Preview mode · spots stay in this browser', error: 'Shared spots unavailable right now' }[data.mode];
+  el.className = 'status' + (data.mode === 'live' ? ' live' : '');
+  el.querySelector('span').textContent = txt + (data.mode === 'live' && !data.canWrite ? ' · view only' : '');
+  document.body.classList.toggle('ro', !data.canWrite);
+}
+function refresh() { syncPins(); renderFilters(); renderList(); renderCard(); setStatus(); }
+
+/* ---------- selection & hover ---------- */
+function select(id, fly = true) {
+  ui.sel = id; renderList(); renderCard();
+  if (id && typeof ME !== 'undefined' && ME.follow) { ME.follow = false; setLocBtn('on'); }
+  const t = id && pinTop(id);
+  if (t && fly) { const small = innerWidth < 700; flyTo(small ? t.clone().add(new THREE.Vector3(0, -1.2, 0)) : t, small ? 13 : 11); }
+  const row = id && document.querySelector(`.row[data-id="${CSS.escape(id)}"]`); if (row) row.scrollIntoView({ block: 'nearest' });
+}
+function setHover(id) {
+  if (ui.hover === id) return;
+  const old = ui.hover && pins.get(ui.hover); if (old) old.star.material = old.mats.star;
+  ui.hover = id;
+  const p = id && pins.get(id), s = id && spots.find(x => x.id === id);
+  if (p && s) {
+    p.star.material = p.mats.hot;
+    tagEl.innerHTML = `${esc(s.name)}<small>${esc(s.hood)}${s.rating !== null ? ' · ★ ' + s.rating.toFixed(1) : ''}</small>`;
+    tag.position.set(p.g.position.x, p.H + 0.3, p.g.position.z); tag.visible = true;
+  } else tag.visible = false;
+  renderer.domElement.style.cursor = id ? 'pointer' : (picking ? 'crosshair' : '');
+}
+
+/* ---------- pointer ---------- */
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+function hitPin(e) {
+  const r = renderer.domElement.getBoundingClientRect();
+  ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  const hits = ray.intersectObjects([...pins.values()].filter(p => p.g.visible).map(p => p.hit), false);
+  return hits.length ? hits[0].object.userData.id : null;
+}
+let down = null, picking = false;
+renderer.domElement.addEventListener('pointerdown', e => { down = { x: e.clientX, y: e.clientY }; });
+renderer.domElement.addEventListener('pointermove', e => { if (e.pointerType === 'mouse' && !down) setHover(picking ? null : hitPin(e)); });
+renderer.domElement.addEventListener('pointerleave', () => setHover(null));
+renderer.domElement.addEventListener('pointerup', e => {
+  const d = down; down = null;
+  if (!d || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 6) return;
+  if (picking) {
+    const p = new THREE.Vector3(), r = renderer.domElement.getBoundingClientRect();
+    ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1); ray.setFromCamera(ndc, camera);
+    if (ray.ray.intersectPlane(groundPlane, p)) finishPick(p.x, p.z);
+    return;
+  }
+  const id = hitPin(e);
+  if (id) { setHover(e.pointerType === 'mouse' ? id : null); select(id); }
+  else if (ui.sel && e.pointerType !== 'mouse') { /* keep card on stray taps */ }
+});
+
+/* ---------- controls wiring ---------- */
+$('#q').addEventListener('input', e => { ui.q = e.target.value.trim(); renderList(); });
+$('#q').addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return; const q = ui.q.toLowerCase(); if (!q) return;
+  const v = visible(); if (v.length) { select(v[0].id); return; }
+  const h = HOODS.find(h => h.name.toLowerCase() === q) || HOODS.find(h => h.name.toLowerCase().startsWith(q));
+  if (h) { const [x, z] = toXZ(h.lat, h.lng); flyTo(new THREE.Vector3(x, 0, z), 24); toast(h.name); }
+});
+$('#typeChips').addEventListener('click', e => { const b = e.target.closest('[data-type]'); if (!b) return; ui.type = b.dataset.type; renderFilters(); renderList(); });
+$('#hoodSel').addEventListener('change', e => { ui.hood = e.target.value; renderList(); const h = HOOD[ui.hood]; if (h) { const [x, z] = toXZ(h.lat, h.lng); flyTo(new THREE.Vector3(x, 0, z), 22); } });
+$('#cuisSel').addEventListener('change', e => { ui.cuisine = e.target.value; renderList(); });
+$('#sortSel').value = ui.sort;
+$('#sortSel').addEventListener('change', e => { ui.sort = e.target.value; store('sort', ui.sort); renderList(); });
+$('#rows').addEventListener('click', e => {
+  if (e.target.id === 'clearF') { ui.q = ''; ui.type = 'All'; ui.hood = ''; ui.cuisine = ''; $('#q').value = ''; renderFilters(); renderList(); return; }
+  const r = e.target.closest('.row'); if (r) { select(r.dataset.id); if (innerWidth < 700) document.body.classList.add('list-off'); }
+});
+$('#rows').addEventListener('keydown', e => { if (e.key === 'Enter') { const r = e.target.closest('.row'); if (r) select(r.dataset.id); } });
+$('#rows').addEventListener('mouseover', e => { const r = e.target.closest('.row'); setHover(r ? r.dataset.id : null); });
+$('#rows').addEventListener('mouseleave', () => setHover(null));
+let armT;
+$('#card').addEventListener('click', async e => {
+  const b = e.target.closest('[data-act]'); if (!b) return;
+  const act = b.dataset.act, v = visible(), i = v.findIndex(x => x.id === ui.sel);
+  if (act === 'close') { ui.sel = null; renderList(); renderCard(); }
+  if (act === 'prev' || act === 'next') { const n = v[(i + (act === 'next' ? 1 : -1) + v.length) % v.length]; if (n) select(n.id); }
+  if (act === 'edit') { const sp = spots.find(x => x.id === ui.sel); if (await ensureUnlocked('name')) openSheet(sp); }
+  if (act === 'del') {
+    if (!b.classList.contains('arm')) { if (!(await ensureUnlocked('pass'))) return; b.classList.add('arm'); b.textContent = 'Tap again to delete'; clearTimeout(armT); armT = setTimeout(() => { b.classList.remove('arm'); b.textContent = 'Delete'; }, 3500); return; }
+    const id = ui.sel; ui.sel = null; renderCard();
+    if (await removeSpot(id)) toast('Spot deleted');
+  }
+});
+$('#luckyBtn').addEventListener('click', () => { const v = visible(); if (!v.length) return toast('No spots to pick from'); let n = v[Math.floor(Math.random() * v.length)]; if (v.length > 1 && n.id === ui.sel) n = v[(v.indexOf(n) + 1) % v.length]; select(n.id); });
+$('#homeBtn').addEventListener('click', () => flyTo(HOME.target, 0, 1300, HOME.pos));
+$('#cityBtn').addEventListener('click', () => flyTo(CITYVIEW.target, 0, 1600, CITYVIEW.pos));
+$('#uiBtn').addEventListener('click', () => document.body.classList.toggle('ui-off'));
+$('#listBtn').addEventListener('click', () => { document.body.classList.toggle('list-off'); store('listOff', document.body.classList.contains('list-off')); });
+$('#filtBtn').addEventListener('click', () => document.body.classList.toggle('filters-open'));
+$('#list .lh').addEventListener('click', e => { if (innerWidth < 700 && !e.target.closest('select')) document.body.classList.toggle('list-off'); });
+if (store('listOff') || innerWidth < 700) document.body.classList.add('list-off');
+addEventListener('keydown', e => {
+  const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '');
+  if (e.key === 'Escape') { if (!$('#passScrim').hidden) return closePass(false); if (!$('#scrim').hidden) return closeSheet(); if (picking) return cancelPick(); if (ui.sel) { ui.sel = null; renderList(); renderCard(); } if (typing) document.activeElement.blur(); return; }
+  if (typing || e.metaKey || e.ctrlKey || e.altKey || !$('#scrim').hidden || !$('#passScrim').hidden) return;
+  if (e.key === '/') { e.preventDefault(); document.body.classList.remove('ui-off'); $('#q').focus(); }
+  else if (e.key === 'h' || e.key === 'H') document.body.classList.toggle('ui-off');
+  else if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft') && ui.sel) $(`#card [data-act="${e.key === 'ArrowRight' ? 'next' : 'prev'}"]`)?.click();
+});
+
+/* ---------- add / edit sheet ---------- */
+let editing = null, draft = { lat: null, lng: null };
+$('#fType').innerHTML = Object.keys(TYPES).map(t => `<option>${t}</option>`).join('');
+$('#fHood').innerHTML = Object.entries(HOOD_GROUPS).map(([g, list]) => `<optgroup label="${esc(g)}">${list.map(h => h[0]).sort((a, b) => a.localeCompare(b)).map(n => `<option>${esc(n)}</option>`).join('')}</optgroup>`).join('') + '<option>Elsewhere</option>';
+$('#rStars').innerHTML = [1, 2, 3, 4, 5].map(n => `<button type="button" data-n="${n}" aria-label="${n} star${n > 1 ? 's' : ''}">★</button>`).join('') + `<input class="in" id="fRate" type="number" min="0" max="5" step="0.1" placeholder="–" aria-label="Rating out of 5">`;
+const paintStars = () => { const v = parseFloat($('#fRate').value); $('#rStars').querySelectorAll('button').forEach(b => b.classList.toggle('on', v >= +b.dataset.n - 0.5)); };
+$('#rStars').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; const cur = parseFloat($('#fRate').value); $('#fRate').value = cur === +b.dataset.n ? '' : b.dataset.n; paintStars(); });
+$('#fRate').addEventListener('input', paintStars);
+function setLoc(lat, lng, how) {
+  draft.lat = lat; draft.lng = lng;
+  $('#locText').textContent = lat === null ? 'Placed in the middle of the neighborhood' : `${how || 'Pinned'} · ${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+}
+function showTab(t) {
+  document.querySelectorAll('#tabs button').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === t));
+  document.querySelectorAll('[data-pane]').forEach(p => p.hidden = p.dataset.pane !== t);
+}
+$('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if (b) showTab(b.dataset.tab); });
+function openSheet(s = null, keep = false) {
+  if (!data.canWrite) return toast('You have view-only access to this map');
+  editing = s;
+  $('#sheetTitle').textContent = s ? 'Edit spot' : 'Add a spot';
+  $('#tabs').hidden = !!s;
+  if (!keep) {
+    $('#smart').value = ''; $('#fName').value = s?.name || ''; $('#fType').value = s?.type || 'Food';
+    $('#fHood').value = HOOD[s?.hood] ? s.hood : (s ? 'Elsewhere' : (ui.hood && HOOD[ui.hood] ? ui.hood : 'Loop'));
+    $('#fCuis').value = s?.cuisine || ''; $('#fDish').value = s?.dish || ''; $('#fNotes').value = s?.notes || '';
+    $('#fRate').value = s?.rating ?? ''; paintStars(); $('#fAddr').value = s?.address || ''; $('#sugg').hidden = true;
+    setLoc(s?.lat ?? null, s?.lng ?? null, s?.lat != null ? 'Pinned' : '');
+    hint('#fillHint', data.backend === 'claude' ? 'Autofill looks up the neighborhood, cuisine, best-known dish and exact spot. Check it before saving.' : 'Type the name and pick it from the list. It fills in the address, exact pin and neighborhood.');
+    showTab('one');
+  }
+  $('#scrim').hidden = false;
+  setTimeout(() => (s ? $('#fName') : $('#smart')).focus({ preventScroll: true }), 30);
+}
+function closeSheet() { $('#scrim').hidden = true; editing = null; }
+$('#addBtn').addEventListener('click', async () => { if (await ensureUnlocked('name')) openSheet(); });
+$('#sheetClose').addEventListener('click', closeSheet);
+$('#cancelBtn').addEventListener('click', closeSheet);
+$('#scrim').addEventListener('click', e => { if (e.target.id === 'scrim') closeSheet(); });
+$('#pickBtn').addEventListener('click', () => {
+  picking = true; $('#scrim').hidden = true; $('#pickbar').hidden = false; document.body.classList.add('picking');
+  renderer.domElement.style.cursor = 'crosshair';
+  const h = HOOD[$('#fHood').value]; if (h && draft.lat === null) { const [x, z] = toXZ(h.lat, h.lng); flyTo(new THREE.Vector3(x, 0, z), 18); }
+  else if (draft.lat !== null) { const [x, z] = toXZ(draft.lat, draft.lng); flyTo(new THREE.Vector3(x, 0, z), 14); }
+});
+function cancelPick() { picking = false; $('#pickbar').hidden = true; document.body.classList.remove('picking'); renderer.domElement.style.cursor = ''; $('#scrim').hidden = false; }
+$('#pickCancel').addEventListener('click', cancelPick);
+function finishPick(x, z) {
+  const [lat, lng] = toLL(x, z); setLoc(lat, lng, 'Pinned on map');
+  $('#fHood').value = nearestHood(lat, lng);
+  cancelPick();
+  if (data.backend === 'gas') gasCall('addressAt', lat, lng).then(a => { if (a && draft.lat === lat) $('#fAddr').value = String(a).slice(0, 120); }).catch(() => {});
+}
+function hint(sel, msg, cls = '') { const h = $(sel); h.textContent = msg; h.className = 'hint ' + cls; }
+
+/* Google Maps link reader */
+function parseMaps(str) {
+  const out = { text: str.trim() };
+  if (!/^https?:\/\//i.test(out.text)) return out;
+  let u; try { u = new URL(out.text); } catch { return out; }
+  if (/goo\.gl$|app\.goo\.gl$/i.test(u.hostname)) { out.short = true; return out; }
+  const place = u.pathname.match(/\/place\/([^/]+)/); if (place) out.name = decodeURIComponent(place[1].replace(/\+/g, ' '));
+  const q = u.searchParams.get('q') || u.searchParams.get('query'); if (!out.name && q && !/^-?\d/.test(q)) out.name = q;
+  const exact = out.text.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/), at = out.text.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+  const m = exact || at; if (m) { out.lat = +m[1]; out.lng = +m[2]; }
+  return out;
+}
+const HOOD_NAMES = HOODS.map(h => h.name);
+function jsonFrom(text) { const m = String(text).match(/[\[{][\s\S]*[\]}]/); if (!m) throw new Error('no json'); return JSON.parse(m[0]); }
+let sampleNS;
+async function getSample() { if (sampleNS === undefined) { try { sampleNS = await window.claude?.use?.('sample') ?? null; } catch { sampleNS = null; } } return sampleNS; }
+const FIELD_RULES = `type: one of Food, Bar, Coffee, Sweets. neighborhood: one of ${HOOD_NAMES.join(', ')} (Elsewhere if none fit). cuisine: 1-3 words, Title Case (e.g. "Burgers", "Deep dish pizza", "Cocktail bar"). dish: the place's best-known dish or drink. address: street address in Chicago. lat, lng: the place's coordinates as numbers. Use null for anything you don't know; never guess coordinates for a place you don't recognise.`;
+
+$('#fillBtn').addEventListener('click', async () => {
+  const raw = $('#smart').value.trim() || $('#fName').value.trim();
+  if (!raw) { hint('#fillHint', 'Type a name or paste a Google Maps link first.', 'bad'); return $('#smart').focus(); }
+  const p = parseMaps(raw);
+  if (p.short) { hint('#fillHint', "Short maps.app links can't be opened from here. Open it, then copy the full link from your browser, or just type the name.", 'bad'); return; }
+  if (p.name) $('#fName').value = p.name.slice(0, 80);
+  else if (!/^https?:/i.test(p.text) && !$('#fName').value.trim()) $('#fName').value = p.text.slice(0, 80);
+  if (Number.isFinite(p.lat)) setLoc(p.lat, p.lng, 'From your Google Maps link');
+  if (data.backend === 'gas') {
+    if (!/^https?:/i.test(p.text)) return runLookup(p.text);
+    if (Number.isFinite(p.lat)) { $('#fHood').value = nearestHood(p.lat, p.lng); gasCall('addressAt', p.lat, p.lng).then(a => { if (a && !$('#fAddr').value) $('#fAddr').value = String(a).slice(0, 120); }).catch(() => {}); }
+    hint('#fillHint', p.name || Number.isFinite(p.lat) ? 'Got the spot from your link. Fill in the rest below.' : 'Type the name instead and pick it from the list.', p.name || Number.isFinite(p.lat) ? 'ok' : 'bad');
+    return;
+  }
+  const sample = await getSample();
+  if (!sample) {
+    if (p.name || Number.isFinite(p.lat)) { hint('#fillHint', 'Got the spot from your link. Fill in the rest below.', 'ok'); const n = Number.isFinite(p.lat) && normalize('x', { name: 'x', lat: p.lat, lng: p.lng }); if (n && n.lat !== null) $('#fHood').value = n.hood; $('#fCuis').focus(); }
+    else hint('#fillHint', 'Paste a full Google Maps link (starting with https://) to drop the pin in the exact spot, or just fill in the details below.', 'bad');
+    return;
+  }
+  const btn = $('#fillBtn'); btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  hint('#fillHint', 'Looking it up…');
+  try {
+    const who = p.name || p.text;
+    const res = await sample(`You fill in entries for a shared map of Chicago restaurants and bars. The user entered: "${who.slice(0, 300)}"${Number.isFinite(p.lat) ? ` (Google Maps coordinates ${p.lat}, ${p.lng})` : ''}.
+Identify the Chicago place they mean. Reply with ONLY one JSON object: {"found": true|false, "name": string, "type": string, "neighborhood": string, "cuisine": string, "dish": string, "address": string, "lat": number|null, "lng": number|null}.
+${FIELD_RULES}`, { modelTier: 'default' });
+    const j = jsonFrom(res.text);
+    if (!j || j.found === false) { hint('#fillHint', "Couldn't identify that place. Fill in the details below.", 'bad'); return; }
+    if (j.name && !p.name) $('#fName').value = String(j.name).slice(0, 80);
+    if (TYPES[j.type]) $('#fType').value = j.type;
+    if (HOOD[j.neighborhood]) $('#fHood').value = j.neighborhood;
+    else { const nn = normalize('x', { name: 'x', lat: j.lat, lng: j.lng }); if (nn && nn.lat !== null) $('#fHood').value = nn.hood; }
+    if (j.cuisine && !$('#fCuis').value) $('#fCuis').value = String(j.cuisine).slice(0, 40);
+    if (j.dish && !$('#fDish').value) $('#fDish').value = String(j.dish).slice(0, 80);
+    if (j.address && !$('#fAddr').value) $('#fAddr').value = String(j.address).slice(0, 120);
+    const n = normalize('x', { name: 'x', lat: j.lat, lng: j.lng });
+    if (!Number.isFinite(p.lat) && n && n.lat !== null) setLoc(n.lat, n.lng, j.address ? String(j.address).slice(0, 60) : 'Found');
+    hint('#fillHint', 'Filled in. Double-check the details, then add your rating and notes.', 'ok');
+    $('#fRate').focus();
+  } catch (err) {
+    hint('#fillHint', err && err.code === 'rate_limited' ? 'Autofill is busy. Try again in a minute.' : "Autofill didn't work this time. Fill in the details below.", 'bad');
+  } finally { btn.disabled = false; btn.textContent = 'Autofill'; }
+});
+/* Place search that behaves like a maps search bar: OpenStreetMap places (via Photon) + Google's geocoder, merged as you type */
+let suggT = null, suggSeq = 0, suggList = [], suggIdx = -1;
+const HOOD_ALIASES = { 'mt greenwood': 'Mount Greenwood', 'mount greenwood': 'Mount Greenwood', 'lakeview': 'Lake View', 'wrigley': 'Wrigleyville', 'ukie village': 'Ukrainian Village', 'the loop': 'Loop', 'downtown': 'Loop', 'chinatown': 'Chinatown', 'oak lawn': 'Oak Lawn', 'logan sq': 'Logan Square', 'hyde pk': 'Hyde Park' };
+function hoodInQuery(q) {
+  const norm = ' ' + q.toLowerCase().replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim() + ' ';
+  const names = [...Object.keys(HOOD_ALIASES), ...HOODS.filter(h => h.name !== 'Elsewhere').map(h => h.name.toLowerCase())].sort((x, y) => y.length - x.length);
+  for (const n of names) {
+    const i = norm.indexOf(' ' + n + ' '); if (i < 0) continue;
+    const rest = (norm.slice(0, i) + ' ' + norm.slice(i + n.length + 2)).replace(/\b(in|near|by|on|at)\s*$/i, '').replace(/\s+/g, ' ').trim();
+    if (rest.length < 2) return null;
+    return { hood: HOOD[HOOD_ALIASES[n] || HOODS.find(h => h.name.toLowerCase() === n).name], rest };
+  }
+  return null;
+}
+const OSM_TYPE = { restaurant: 'Food', fast_food: 'Food', food_court: 'Food', bbq: 'Food', cafe: 'Coffee', coffee_shop: 'Coffee', bar: 'Bar', pub: 'Bar', biergarten: 'Bar', nightclub: 'Bar', ice_cream: 'Sweets', bakery: 'Sweets', confectionery: 'Sweets', pastry: 'Sweets', donut: 'Sweets' };
+function osmAddress(p, inChi, inOL) {
+  const street = [p.housenumber, p.street].filter(Boolean).join(' ');
+  const city = inChi ? 'Chicago' : inOL ? 'Oak Lawn' : (p.city || p.town || p.village || p.district || '');
+  return [street, city, ['IL', p.postcode].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+}
+async function photonSearch(q, near) {
+  const params = new URLSearchParams({ q, limit: '12', lang: 'en', bbox: '-87.96,41.62,-87.52,42.04', lat: String(near[0]), lon: String(near[1]), location_bias_scale: near[2] ? '0.8' : '0.25', zoom: near[2] ? '15' : '11' });
+  const r = await fetch('https://photon.komoot.io/api/?' + params);
+  if (!r.ok) throw new Error('photon ' + r.status);
+  const j = await r.json();
+  return (j.features || []).map(f => {
+    const p = f.properties || {}, [lng, lat] = (f.geometry && f.geometry.coordinates) || [];
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    const [x, z] = toXZ(lat, lng), chi = inCity(x, z), ol = !chi && inOak(x, z); if (!chi && !ol) return null;
+    const poi = !!p.name && p.osm_key !== 'highway' && p.osm_key !== 'place' && p.osm_key !== 'boundary';
+    return { name: poi ? String(p.name) : '', address: osmAddress(p, chi, ol), lat, lng, type: OSM_TYPE[p.osm_value] || '', isPlace: poi, food: !!OSM_TYPE[p.osm_value], full: !!p.housenumber };
+  }).filter(Boolean);
+}
+const distKm = (a, b) => Math.hypot((a.lat - b.lat) * 111, (a.lng - b.lng) * 82.9);
+function rankPlaces(list, q, near) {
+  const words = q.toLowerCase().split(/\s+/).filter(w => w.length > 1);
+  const score = c => { const n = (c.name || '').toLowerCase(); let s = 0; if (n && words.every(w => n.includes(w))) s += 5; else if (n && words.some(w => n.includes(w))) s += 2; if (c.food) s += 2; if (c.isPlace) s += 1; if (near[2]) s -= Math.min(4, distKm(c, { lat: near[0], lng: near[1] }) * 0.8); return s; };
+  const out = [];
+  for (const c of list.sort((a, b) => score(b) - score(a))) if (!out.some(o => distKm(o, c) < 0.06 && (!o.name || !c.name || o.name.toLowerCase() === c.name.toLowerCase()))) out.push(c);
+  return out.slice(0, 6);
+}
+function renderSugg(list, q, loading) {
+  const box = $('#sugg'); suggList = list; suggIdx = list.length ? 0 : -1;
+  if (!list.length) { box.innerHTML = loading ? '<p><span class="spin"></span> Searching…</p>' : `<p>No match for “${esc(q)}”. Try adding the street or neighborhood (like “burger king mt greenwood”), or fill it in below and use Pick on map.</p>`; box.hidden = false; return; }
+  box.innerHTML = list.map((c, i) => `<button type="button" data-i="${i}" aria-selected="${i === suggIdx}"><b>${esc(c.name || c.address.split(',')[0] || q)}</b><span>${esc(c.address || 'Chicago')}${c.lat ? ' · ' + esc(nearestHood(c.lat, c.lng)) : ''}</span></button>`).join('') + (loading ? '<p><span class="spin"></span> Looking for more…</p>' : '');
+  box.hidden = false;
+}
+function moveSugg(d) { if (!suggList.length) return; suggIdx = (suggIdx + d + suggList.length) % suggList.length; $('#sugg').querySelectorAll('button[data-i]').forEach((b, i) => b.setAttribute('aria-selected', i === suggIdx)); }
+async function runLookup(q) {
+  q = q.trim(); if (q.length < 2) { $('#sugg').hidden = true; return; }
+  const seq = ++suggSeq, hq = hoodInQuery(q), term = hq ? hq.rest : q;
+  const near = hq ? [hq.hood.lat, hq.hood.lng, true] : [41.8781, -87.6298, false];
+  let found = [], pending = 2;
+  const done = () => { if (seq !== suggSeq) return; pending--; renderSugg(rankPlaces(found.slice(), term, near), q, pending > 0); };
+  renderSugg([], q, true);
+  photonSearch(term, near).then(l => { found = found.concat(l); }).catch(() => {}).finally(done);
+  (data.backend === 'gas' ? gasCall('lookupPlace', q) : Promise.resolve([])).then(l => { if (Array.isArray(l)) found = found.concat(l.map(c => ({ ...c, food: !!c.type, full: /^\d/.test(c.address || '') }))); }).catch(() => {}).finally(done);
+}
+function choosePlace(c, q) {
+  if (!c) return;
+  if (c.name) $('#fName').value = c.name.slice(0, 80);
+  else if (!$('#fName').value.trim()) $('#fName').value = (hoodInQuery(q)?.rest || q).slice(0, 80);
+  $('#fAddr').value = (c.address || '').slice(0, 120);
+  setLoc(c.lat, c.lng, 'Found');
+  $('#fHood').value = nearestHood(c.lat, c.lng);
+  if (TYPES[c.type]) $('#fType').value = c.type;
+  $('#sugg').hidden = true; suggList = [];
+  hint('#fillHint', 'Got it. Add the cuisine, your favorite dish and a rating.', 'ok');
+  if (!c.full && data.backend === 'gas') {
+    hint('#fillHint', 'Got it. Finding the full street address…', 'ok');
+    const lat = c.lat;
+    gasCall('addressAt', c.lat, c.lng).then(a => { if (a && draft.lat === lat) { $('#fAddr').value = String(a).slice(0, 120); hint('#fillHint', 'Got it. Add the cuisine, your favorite dish and a rating.', 'ok'); } }).catch(() => {});
+  }
+  $('#fCuis').focus();
+}
+$('#sugg').addEventListener('click', e => { const b = e.target.closest('button[data-i]'); if (b) choosePlace(suggList[+b.dataset.i], $('#smart').value.trim()); });
+$('#smart').addEventListener('keydown', e => {
+  const open = !$('#sugg').hidden && suggList.length;
+  if (e.key === 'ArrowDown' && open) { e.preventDefault(); moveSugg(1); }
+  else if (e.key === 'ArrowUp' && open) { e.preventDefault(); moveSugg(-1); }
+  else if (e.key === 'Escape' && !$('#sugg').hidden) { e.preventDefault(); e.stopPropagation(); $('#sugg').hidden = true; }
+  else if (e.key === 'Enter') { e.preventDefault(); if (open && data.backend !== 'claude') choosePlace(suggList[Math.max(0, suggIdx)], $('#smart').value.trim()); else $('#fillBtn').click(); }
+});
+$('#smart').addEventListener('input', e => {
+  if (data.backend === 'claude') return;
+  clearTimeout(suggT); const q = e.target.value.trim();
+  if (q.length < 2 || /^https?:/i.test(q)) { if (!q) { $('#sugg').hidden = true; suggList = []; } return; }
+  suggT = setTimeout(() => runLookup(q), 250);
+});
+
+$('#oneForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const name = $('#fName').value.trim(); if (!name) { $('#fName').focus(); return; }
+  const rv = $('#fRate').value.trim();
+  const body = { name, type: $('#fType').value, hood: $('#fHood').value, cuisine: $('#fCuis').value.trim(), dish: $('#fDish').value.trim(), notes: $('#fNotes').value.trim(), rating: rv === '' ? null : Math.max(0, Math.min(5, +rv)), lat: draft.lat, lng: draft.lng, address: $('#fAddr').value.trim() };
+  const btn = $('#saveBtn'); btn.disabled = true; btn.textContent = 'Saving…';
+  const id = await saveSpot(editing ? editing.id : null, body);
+  btn.disabled = false; btn.textContent = 'Save spot';
+  if (id) { const wasEdit = !!editing; closeSheet(); toast(wasEdit ? 'Saved' : `${name} is on the map`); select(id); }
+});
+
+/* bulk import */
+let parsed = [];
+function splitLine(line) {
+  if (line.includes('\t')) return line.split('\t');
+  if (line.includes('|')) return line.split('|');
+  if (line.includes(',')) { const out = []; let cur = '', q = false; for (const ch of line) { if (ch === '"') q = !q; else if (ch === ',' && !q) { out.push(cur); cur = ''; } else cur += ch; } out.push(cur); return out; }
+  if (/\s[-–—]\s/.test(line)) return line.split(/\s[-–—]\s/);
+  return [line];
+}
+function localParse(text) {
+  return text.split(/\r?\n/).map(l => l.replace(/^\s*(\d+[.)]|[-*•])\s*/, '').trim()).filter(Boolean).map(splitLine).map(c => c.map(x => x.trim()))
+    .filter(c => !/^name$/i.test(c[0])).map(c => {
+      const r = c[4] ? parseFloat(c[4]) : NaN, scale = /\/\s*10/.test(c[4] || '') || r > 5 ? 2 : 1;
+      const hood = HOOD_NAMES.find(h => h.toLowerCase() === (c[1] || '').toLowerCase()) || (c[1] ? 'Elsewhere' : 'Elsewhere');
+      return { name: c[0], hood, cuisine: c[2] || '', dish: c[3] || '', rating: Number.isFinite(r) ? r / scale : null, notes: c.slice(5).join(', '), type: 'Food', lat: null, lng: null };
+    });
+}
+function renderPreview() {
+  $('#importBtn').disabled = !parsed.length;
+  $('#importBtn').textContent = parsed.length ? `Add ${parsed.length} spot${parsed.length === 1 ? '' : 's'}` : 'Add to map';
+  $('#pv').innerHTML = parsed.length ? `<div class="pv"><table><thead><tr><th>Spot</th><th>Where</th><th>Rating</th></tr></thead><tbody>${parsed.map(r => `<tr><td><b>${esc(r.name)}</b><br><span style="color:var(--mute)">${esc([r.type, r.cuisine, r.dish].filter(Boolean).join(' · '))}</span></td><td>${esc(r.hood)}${r.lat !== null ? '<br><span style="color:#8fe3b3">exact spot</span>' : ''}</td><td>${r.rating === null ? '–' : esc(r.rating)}</td></tr>`).join('')}</tbody></table></div>` : '';
+}
+$('#readBtn').addEventListener('click', async () => {
+  const text = $('#bulk').value.trim(); if (!text) return hint('#bulkHint', 'Paste your list first.', 'bad');
+  const lines = text.split(/\r?\n/).filter(l => l.trim()).slice(0, 60);
+  parsed = localParse(lines.join('\n')).map(r => normalize('p', r)).filter(Boolean);
+  const sample = await getSample();
+  if (!sample && data.backend === 'gas' && parsed.length) {
+    const btn = $('#readBtn'); btn.disabled = true; let found = 0;
+    for (let i = 0; i < parsed.length; i++) {
+      btn.innerHTML = `<span class="spin"></span> Finding ${i + 1} of ${parsed.length}`;
+      const r = parsed[i];
+      try { const list = await gasCall('lookupPlace', r.name + (r.hood && r.hood !== 'Elsewhere' ? ', ' + r.hood : '')); const c = Array.isArray(list) && list[0]; if (c) { r.lat = c.lat; r.lng = c.lng; r.address = c.address; if (!HOOD[r.hood] || r.hood === 'Elsewhere') r.hood = nearestHood(c.lat, c.lng); found++; } } catch {}
+    }
+    btn.disabled = false; btn.textContent = 'Read my list'; renderPreview();
+    return hint('#bulkHint', `Read ${parsed.length} spots and found ${found} on the map. Check the preview; fix any with Edit after adding.`, 'ok');
+  }
+  if (!sample) { renderPreview(); return hint('#bulkHint', `Read ${parsed.length} spots. Locations go to the middle of each neighborhood. Drag in exact spots later with Edit.`, 'ok'); }
+  const btn = $('#readBtn'); btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Reading';
+  hint('#bulkHint', `Reading ${lines.length} line${lines.length === 1 ? '' : 's'}…`);
+  try {
+    const res = await sample(`Turn this user's list of Chicago restaurants and bars into map entries. Their list:
+"""
+${lines.join('\n').slice(0, 8000)}
+"""
+Reply with ONLY a JSON array, one object per place, in their order: {"name","type","neighborhood","cuisine","dish","rating","notes","address","lat","lng"}.
+Rules: rating and notes come ONLY from the user's text, word for word for notes. Convert ratings to a 0-5 scale (e.g. 9/10 -> 4.5, 8.2 -> 4.1); null if they gave none. Never invent ratings or notes. If the user named a favorite dish, use theirs; otherwise use the place's best-known dish. ${FIELD_RULES}`, { modelTier: 'default' });
+    const arr = jsonFrom(res.text);
+    if (!Array.isArray(arr) || !arr.length) throw new Error('empty');
+    parsed = arr.map(o => normalize('p', { ...o, hood: o.neighborhood })).filter(Boolean).slice(0, 60);
+    hint('#bulkHint', `Found ${parsed.length} spots. Check the preview, then add them.`, 'ok');
+  } catch (err) {
+    hint('#bulkHint', `Read ${parsed.length} spots without autofill. Exact locations can be added later with Edit.`, parsed.length ? 'ok' : 'bad');
+  } finally { btn.disabled = false; btn.textContent = 'Read my list'; renderPreview(); }
+});
+$('#importBtn').addEventListener('click', async () => {
+  const btn = $('#importBtn'); btn.disabled = true; let n = 0, last = null;
+  for (const r of parsed) { btn.textContent = `Adding ${n + 1} of ${parsed.length}…`; const { id, ...body } = r; const nid = await saveSpot(null, body, true); if (!nid) break; last = nid; n++; }
+  btn.disabled = false; parsed = []; renderPreview(); $('#bulk').value = '';
+  if (n) { closeSheet(); toast(`Added ${n} spot${n === 1 ? '' : 's'}`); flyTo(HOME.target, 0, 1300, HOME.pos); }
+});
+
+/* ---------- data layer: shared db, or local preview ---------- */
+const local = { load() { spots = (store('local') || []).map(d => normalize(d.id, d)).filter(Boolean); }, save() { store('local', spots); } };
+function dbErr(err, quiet) {
+  const c = err && err.code;
+  if (c === 'invalid_argument') { data.canWrite = false; toast('You have view-only access to this map'); setStatus(); renderCard(); }
+  else if (c === 'quota_exceeded') toast('This map is full. Delete a few spots to add more.');
+  else if (c === 'resource_exhausted') toast('Slow down a moment, then try again');
+  else if (!quiet) toast("Couldn't save. Check your connection and try again.");
+}
+async function withRetry(fn) { try { return await fn(); } catch (e) { if (e && e.code === 'unavailable') { await new Promise(r => setTimeout(r, 500 + Math.random() * 700)); return fn(); } throw e; } }
+async function saveSpot(id, body, bulk = false) {
+  const now = Date.now(), prev = id ? spots.find(s => s.id === id) : null;
+  const doc = { ...body, updated: now, created: prev?.created || now, by: prev?.by || data.me || '', editBy: prev ? (data.me || '') : '' };
+  if (!prev) delete doc.editBy;
+  if (data.backend === 'gas') {
+    if (!(await ensureUnlocked('name'))) return null;
+    try {
+      const nid = String(await gasCall('saveSpot', store('pass'), { ...doc, id: id || '' }));
+      const n = normalize(nid, { ...doc, created: prev?.created || now }); spots = spots.filter(s => s.id !== nid).concat(n); lastSig = ''; refresh();
+      setTimeout(gasLoad, 1500); return nid;
+    } catch (e) { gasErr(e); return null; }
+  }
+  if (data.db) {
+    try { const ref = id ? data.db.collection('spots').doc(id) : data.db.collection('spots').doc(); await withRetry(() => ref.set(doc)); return ref.id; }
+    catch (e) { dbErr(e); return null; }
+  }
+  const nid = id || 'l' + now.toString(36) + Math.random().toString(36).slice(2, 6);
+  const n = normalize(nid, doc); spots = spots.filter(s => s.id !== nid).concat(n); local.save(); refresh(); return nid;
+}
+async function removeSpot(id) {
+  if (data.backend === 'gas') {
+    if (!(await ensureUnlocked('pass'))) return false;
+    try { await gasCall('deleteSpot', store('pass'), id); spots = spots.filter(s => s.id !== id); lastSig = ''; refresh(); setTimeout(gasLoad, 1500); return true; }
+    catch (e) { gasErr(e); return false; }
+  }
+  if (data.db) { try { await withRetry(() => data.db.collection('spots').doc(id).delete()); return true; } catch (e) { dbErr(e); return false; } }
+  spots = spots.filter(s => s.id !== id); local.save(); refresh(); return true;
+}
+async function resolveNames() {
+  const ids = [...new Set(spots.flatMap(s => [s.by, s.editBy]).filter(Boolean))].filter(id => !(id in names));
+  if (!ids.length || !data.user?.profiles) return;
+  try { const ps = await data.user.profiles(ids); for (const id of ids) names[id] = (ps && ps[id] && ps[id].name) || ''; renderCard(); } catch {}
+}
+/* Google Apps Script backend: the website version hosted by Google, with a group passcode */
+let lastSig = '', gasTimer = null, gasBusy = false;
+function gasErr(e) {
+  const m = String((e && e.message) || e || '');
+  if (m.includes('WRONG_PASSCODE')) { store('pass', null); toast('That passcode didn\'t work. Try deleting again.'); }
+  else toast("Couldn't save. Check your connection and try again.");
+}
+async function gasLoad() {
+  if (gasBusy) return; gasBusy = true;
+  try {
+    const list = await gasCall('listSpots'), sig = JSON.stringify(list);
+    data.mode = 'live';
+    if (sig !== lastSig) { lastSig = sig; spots = (list || []).map(d => normalize(String(d.id), d)).filter(Boolean); if (ui.sel && !spots.some(s => s.id === ui.sel)) ui.sel = null; refresh(); }
+    else setStatus();
+  } catch (e) { data.mode = spots.length ? 'cached' : 'error'; setStatus(); renderList(); }
+  finally { gasBusy = false; }
+}
+let unlockWait = null, unlockMode = 'name';
+/* Adding and editing only need a first name; deleting needs the group passcode. */
+function ensureUnlocked(need = 'name') {
+  if (data.backend !== 'gas') return Promise.resolve(data.canWrite || (toast('You have view-only access to this map'), false));
+  if (store('name') && (need === 'name' || store('pass'))) { data.me = store('name'); return Promise.resolve(true); }
+  unlockMode = need;
+  const del = need === 'pass';
+  $('#passRow').hidden = !del;
+  $('#passScrim h2').textContent = del ? 'Delete a spot' : 'Join the map';
+  $('#passIntro').textContent = del ? 'Deleting needs the group passcode, so spots can\'t disappear by accident. You only enter it once on this phone.' : 'Add your first name so friends know who added what. You only do this once on this phone.';
+  $('#passBtn').textContent = del ? 'Unlock' : 'Continue';
+  $('#passIn').value = ''; $('#nameIn').value = store('name') || ''; hint('#passHint', '');
+  $('#passScrim').hidden = false; setTimeout(() => (del ? $('#passIn') : $('#nameIn')).focus(), 30);
+  return new Promise(res => { unlockWait = res; });
+}
+function closePass(ok) { $('#passScrim').hidden = true; if (unlockWait) { const r = unlockWait; unlockWait = null; r(ok); } }
+$('#passForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const pass = $('#passIn').value.trim(), name = $('#nameIn').value.trim().slice(0, 30);
+  if (!name) { hint('#passHint', 'Add your first name so friends know who added what.', 'bad'); return $('#nameIn').focus(); }
+  if (unlockMode === 'name') { store('name', name); data.me = name; closePass(true); toast(`Welcome, ${name}`); renderCard(); return; }
+  if (!pass) return $('#passIn').focus();
+  const btn = $('#passBtn'); btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  let ok = false; try { ok = await gasCall('checkPass', pass); } catch { hint('#passHint', "Couldn't check right now. Try again in a moment.", 'bad'); }
+  btn.disabled = false; btn.textContent = 'Unlock';
+  if (ok) { store('pass', pass); store('name', name); data.me = name; closePass(true); toast(`Welcome, ${name}`); renderCard(); }
+  else if (ok === false && !$('#passHint').classList.contains('bad')) hint('#passHint', "That's not the passcode. Ask whoever shared the map.", 'bad');
+});
+$('#passClose').addEventListener('click', () => closePass(false));
+$('#passScrim').addEventListener('click', e => { if (e.target.id === 'passScrim') closePass(false); });
+
+async function initData() {
+  if (GAS) {
+    data.backend = 'gas'; data.canWrite = true; data.me = store('name');
+    $('#fillBtn').textContent = 'Search';
+    $('#bulkHint').textContent = 'One spot per line: name, neighborhood, cuisine, favorite dish, rating, notes. Separate with commas, tabs or |.';
+    $('#smart').placeholder = 'Search a restaurant, bar or address';
+    await gasLoad();
+    gasTimer = setInterval(() => { if (!document.hidden) gasLoad(); }, 15000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) gasLoad(); });
+    return;
+  }
+  const use = window.claude && window.claude.use;
+  if (!use) { data.mode = 'local'; data.backend = 'local'; $('#fillBtn').textContent = 'Search'; local.load(); refresh(); return; }
+  const slow = setTimeout(() => { if (data.mode === 'connecting') { data.mode = 'slow'; setStatus(); renderList(); } }, 10000);
+  let db = null, user = null;
+  try { [db, user] = await Promise.all([use('db').catch(() => null), use('user').catch(() => null)]); } catch {}
+  data.user = user;
+  if (user) {
+    try { data.me = await user.id(); } catch {}
+    try { const w = await user.can('data.write'); data.canWrite = w !== false; } catch {}
+  }
+  if (!db) { clearTimeout(slow); data.mode = 'local'; data.canWrite = true; local.load(); refresh(); return; }
+  data.db = db;
+  db.collection('spots').onSnapshot(snap => {
+    if (!snap.metadata.fromCache) clearTimeout(slow);
+    spots = snap.docs.map(d => normalize(d.id, d.data())).filter(Boolean);
+    data.mode = snap.metadata.fromCache ? (data.mode === 'live' ? 'live' : 'cached') : 'live';
+    if (ui.sel && !spots.some(s => s.id === ui.sel)) ui.sel = null;
+    refresh(); resolveNames();
+  }, err => { clearTimeout(slow); data.mode = 'error'; setStatus(); renderList(); });
+}
+
+
+/* ---------- time of day + live Chicago weather ---------- */
+const WX = { dir: new THREE.Vector3(-0.4, 0.6, -0.3).normalize(), mode: 'live', live: null, look: null, flash: 0, nextFlash: 0 };
+const WX_LOOKS = { Live: null, Day: { el: 42, az: 205 }, Sunset: { el: 2.5, az: 248 }, Night: { el: -25, az: 300 }, Rain: { el: 30, az: 210, code: 63 }, Snow: { el: 22, az: 200, code: 73 }, Fog: { el: 18, az: 140, code: 45 }, Storm: { el: -10, az: 260, code: 95 } };
+function sunPos(ms) {
+  const rad = Math.PI / 180, d = ms / 86400000 - 10957.5, g = rad * (357.529 + 0.98560028 * d), q = 280.459 + 0.98564736 * d;
+  const L = rad * (q + 1.915 * Math.sin(g) + 0.02 * Math.sin(2 * g)), e = rad * (23.439 - 0.00000036 * d);
+  const ra = Math.atan2(Math.cos(e) * Math.sin(L), Math.cos(L)), dec = Math.asin(Math.sin(e) * Math.sin(L));
+  const gmst = ((18.697374558 + 24.06570982441908 * d) % 24 + 24) % 24, ha = (gmst * 15 + LNG0) * rad - ra, la = LAT0 * rad;
+  const el = Math.asin(Math.sin(la) * Math.sin(dec) + Math.cos(la) * Math.cos(dec) * Math.cos(ha));
+  const az = Math.atan2(-Math.sin(ha), Math.tan(dec) * Math.cos(la) - Math.sin(la) * Math.cos(ha));
+  return { el: el / rad, az: ((az / rad) + 360) % 360 };
+}
+function wxFromCode(c) {
+  c = Number(c) || 0;
+  if (c >= 95) return { label: 'Thunderstorms', icon: 'storm', cloud: 1, rain: 1, storm: 1 };
+  if (c >= 85) return { label: 'Snow showers', icon: 'snow', cloud: 0.9, snow: 0.8 };
+  if (c >= 80) return { label: 'Rain showers', icon: 'rain', cloud: 0.85, rain: 0.7 };
+  if (c >= 71 && c <= 77) return { label: c >= 75 ? 'Heavy snow' : c >= 73 ? 'Snow' : 'Light snow', icon: 'snow', cloud: 0.95, snow: c >= 75 ? 1 : c >= 73 ? 0.75 : 0.45 };
+  if (c >= 61 && c <= 67) return { label: c >= 65 ? 'Heavy rain' : c >= 63 ? 'Rain' : 'Light rain', icon: 'rain', cloud: 0.95, rain: c >= 65 ? 1 : c >= 63 ? 0.75 : 0.45 };
+  if (c >= 51 && c <= 57) return { label: 'Drizzle', icon: 'rain', cloud: 0.85, rain: 0.3 };
+  if (c === 45 || c === 48) return { label: 'Fog', icon: 'fog', cloud: 0.8, fog: 1 };
+  if (c === 3) return { label: 'Overcast', icon: 'cloud', cloud: 0.85 };
+  if (c === 2) return { label: 'Partly cloudy', icon: 'cloud', cloud: 0.45 };
+  if (c === 1) return { label: 'Mostly clear', icon: 'sun', cloud: 0.15 };
+  return { label: 'Clear', icon: 'sun', cloud: 0 };
+}
+const WX_ICONS = {
+  sun: '<circle cx="12" cy="12" r="4.5" fill="#ffc94d"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1" stroke="#ffc94d" stroke-width="2" stroke-linecap="round"/>',
+  moon: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5Z" fill="#cfe0ff"/>',
+  cloud: '<path d="M7 18h10a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.2 11 3.5 3.5 0 0 0 7 18Z" fill="#c9d4e0"/>',
+  rain: '<path d="M7 14h10a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.2 7 3.5 3.5 0 0 0 7 14Z" fill="#c9d4e0"/><path d="M8 17l-1 3M12 17l-1 3M16 17l-1 3" stroke="#41b6e6" stroke-width="2" stroke-linecap="round"/>',
+  snow: '<path d="M7 14h10a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.2 7 3.5 3.5 0 0 0 7 14Z" fill="#c9d4e0"/><g fill="#fff"><circle cx="8" cy="18" r="1.3"/><circle cx="12" cy="20" r="1.3"/><circle cx="16" cy="18" r="1.3"/></g>',
+  fog: '<path d="M4 9h16M3 13h18M5 17h14" stroke="#c9d4e0" stroke-width="2" stroke-linecap="round"/>',
+  storm: '<path d="M7 13h10a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.2 6 3.5 3.5 0 0 0 7 13Z" fill="#aab6c4"/><path d="M12.5 13 9.5 18h3l-1.5 4 4.5-6h-3l1.5-3Z" fill="#ffd34d"/>'
+};
+const C = c => new THREE.Color(c);
+const PAL = {
+  sky: [C('#070b12'), C('#a9cbe8'), C('#e3946a')], skyCloud: [C('#0a0e14'), C('#9aa5b1'), C('#8f7f80')],
+  hemiSky: [C('#4a6a9c'), C('#d4e6ff'), C('#f2b086')], hemiGround: [C('#0a0e14'), C('#5b6068'), C('#3a2c33')],
+  sun: [C('#b9ccff'), C('#fff3dd'), C('#ff9a52')], land: { '#0f151e': '#5f6874', '#10151c': '#5c646e', '#0a2236': '#3f86b6', '#11281b': '#4f7e47', '#141b24': '#6c737c' },
+  ground: [C('#080b10'), C('#474e57')], river: [C('#1f7fb5'), C('#3399d8')]
+};
+const SHAPE_BASE = Object.fromEntries(Object.keys(SHAPE_MATS).map(k => [k, C(k)]));
+const tmpC = new THREE.Color(), tmpC2 = new THREE.Color();
+function mix3(arr, day, dusk, out) { out.copy(arr[0]).lerp(arr[1], day); if (arr[2]) out.lerp(arr[2], dusk); return out; }
+/* rain streaks and snowflakes live in a box that follows the camera target */
+const RAIN_N = 3200, SNOW_N = 4200;
+const rainGeo = new THREE.BufferGeometry(), rainPos = new Float32Array(RAIN_N * 6), rainSeed = new Float32Array(RAIN_N * 3);
+for (let i = 0; i < RAIN_N; i++) { rainSeed[i * 3] = Math.random(); rainSeed[i * 3 + 1] = Math.random(); rainSeed[i * 3 + 2] = Math.random(); }
+rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPos, 3));
+const rain = new THREE.LineSegments(rainGeo, new THREE.LineBasicMaterial({ color: '#a9c8e6', transparent: true, opacity: 0.45, depthWrite: false }));
+rain.frustumCulled = false; rain.visible = false; scene.add(rain);
+const snowGeo = new THREE.BufferGeometry(), snowPos = new Float32Array(SNOW_N * 3), snowSeed = new Float32Array(SNOW_N * 3);
+for (let i = 0; i < SNOW_N; i++) { snowSeed[i * 3] = Math.random(); snowSeed[i * 3 + 1] = Math.random(); snowSeed[i * 3 + 2] = Math.random(); }
+snowGeo.setAttribute('position', new THREE.BufferAttribute(snowPos, 3));
+const flakeTex = (() => { const cv = document.createElement('canvas'); cv.width = cv.height = 32; const g = cv.getContext('2d'); const gr = g.createRadialGradient(16, 16, 0, 16, 16, 16); gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.5, 'rgba(255,255,255,.7)'); gr.addColorStop(1, 'rgba(255,255,255,0)'); g.fillStyle = gr; g.fillRect(0, 0, 32, 32); return new THREE.CanvasTexture(cv); })();
+const snowMat = new THREE.PointsMaterial({ color: '#ffffff', map: flakeTex, size: 0.35, transparent: true, opacity: 0.9, depthWrite: false, sizeAttenuation: true });
+const snow = new THREE.Points(snowGeo, snowMat); snow.frustumCulled = false; snow.visible = false; scene.add(snow);
+
+function applyLook() {
+  const look = WX.look; if (!look) return;
+  const day = THREE.MathUtils.smoothstep(look.el, -7, 8), dusk = Math.max(0, 1 - Math.abs(look.el - 2) / 9) * (look.el > -7 ? 1 : 0) * 0.8;
+  const cl = look.cloud || 0, cloudy = Math.min(1, cl * 0.9);
+  const az = look.az * Math.PI / 180, el = Math.max(look.el, 12) * Math.PI / 180;
+  if (look.el > -4) WX.dir.set(Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el)).normalize();
+  else WX.dir.set(-0.45, 0.62, -0.32).normalize();
+  const sky = mix3(PAL.sky, day, dusk * (1 - cloudy), tmpC).clone().lerp(mix3(PAL.skyCloud, day, dusk, tmpC2), cloudy);
+  if (look.snow) sky.lerp(C(day > 0.5 ? '#c3cbd3' : '#141a22'), 0.5 * look.snow);
+  scene.background.copy(sky); scene.fog.color.copy(sky);
+  mix3(PAL.hemiSky, day, dusk, hemi.color); mix3(PAL.hemiGround, day, dusk, hemi.groundColor);
+  hemi.color.lerp(C('#b7c0ca'), cloudy * day * 0.6);
+  hemi.intensity = THREE.MathUtils.lerp(0.7, 1.25, day) * (1 - cloudy * 0.15);
+  mix3(PAL.sun, day, dusk, moon.color);
+  moon.intensity = THREE.MathUtils.lerp(0.95, 2.3, day) * (1 - cloudy * 0.75) * (look.el < -4 ? 1 : 1);
+  warm.intensity = THREE.MathUtils.lerp(0.35, 0.05, day) + dusk * 0.5;
+  WXU.uDay.value = day * (1 - cloudy * 0.25) + dusk * 0.15;
+  WXU.uWin.value = Math.max(0.15, 1 - day * 0.95) * (day < 0.5 ? 1 : 1 + cloudy * 0.6);
+  if (bloomPass) bloomPass.strength = THREE.MathUtils.lerp(0.5, 0.1, day) + dusk * 0.15;
+  renderer.toneMappingExposure = THREE.MathUtils.lerp(1.05, 0.95, day);
+  for (const [k, mats] of Object.entries(SHAPE_MATS)) { const dayCol = PAL.land[k]; if (!dayCol) continue; const c = SHAPE_BASE[k].clone().lerp(C(dayCol), day * (1 - cloudy * 0.3)); if (look.snow && k !== '#0a2236') c.lerp(C('#e6ebf0'), look.snow * 0.55 * Math.max(day, 0.25)); mats.forEach(m => m.color.copy(c)); }
+  ground.material.color.copy(PAL.ground[0]).lerp(PAL.ground[1], day * 0.9);
+  riverMat.color.copy(PAL.river[0]).lerp(PAL.river[1], day); riverMat.emissiveIntensity = THREE.MathUtils.lerp(0.55, 0.12, day);
+  streetMat.opacity = THREE.MathUtils.lerp(0.3, 0.14, day); streetMat.color.set(day > 0.5 ? '#e8ebef' : '#ff9e45');
+  grid.material.transparent = true; grid.material.opacity = THREE.MathUtils.lerp(1, 0.25, day);
+  rain.visible = !!look.rain; rain.material.opacity = 0.25 + (look.rain || 0) * 0.35; rain.material.color.set(day > 0.5 ? '#6f8193' : '#a9c8e6');
+  snow.visible = !!look.snow;
+  WX.fogN = look.fog ? 0.35 : look.rain ? 0.55 : look.snow ? 0.5 : 1; WX.fogF = look.fog ? 0.45 : (look.rain || look.snow) ? 0.6 : 1;
+  WX.pinBoost = 1 + day * 0.45; for (const m of Object.values(PM)) m.star.emissiveIntensity = THREE.MathUtils.lerp(1.6, 2.8, day);
+  WX.storm = !!look.storm;
+}
+function setLook(name) {
+  WX.mode = name;
+  if (name === 'Live') {
+    const now = Date.now(), sp = sunPos(now), w = WX.live ? wxFromCode(WX.live.weather_code) : { cloud: 0 };
+    WX.look = { ...w, el: sp.el, az: sp.az };
+  } else { const p = WX_LOOKS[name], w = p.code != null ? wxFromCode(p.code) : { cloud: 0, label: name, icon: p.el > 0 ? 'sun' : 'moon' }; WX.look = { ...w, el: p.el, az: p.az }; }
+  applyLook(); renderWx();
+}
+function renderWx() {
+  const btn = $('#wx'), look = WX.look; if (!look) return;
+  const live = WX.mode === 'Live', w = WX.live;
+  const icon = look.icon === 'sun' && look.el < -4 ? 'moon' : (look.icon || (look.el > 0 ? 'sun' : 'moon'));
+  $('#wxIcon').innerHTML = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none">${WX_ICONS[icon] || WX_ICONS.cloud}</svg>`;
+  $('#wxTemp').textContent = live && w && Number.isFinite(w.temperature_2m) ? `${Math.round(w.temperature_2m)}°` : '';
+  $('#wxText').textContent = live ? (w ? look.label : (look.el > 0 ? 'Daytime' : 'Night')) : `Preview: ${WX.mode}`;
+  $('#wxTime').textContent = live ? new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Chicago' }) : 'tap Live to go back';
+  btn.hidden = false;
+  $('#wxp').innerHTML = Object.keys(WX_LOOKS).map(n => `<button type="button" data-look="${n}" aria-pressed="${WX.mode === n}">${n}</button>`).join('');
+}
+async function fetchWx() {
+  try {
+    const r = await fetch('https://api.open-meteo.com/v1/forecast?latitude=41.8781&longitude=-87.6298&current=temperature_2m,weather_code,cloud_cover,wind_speed_10m,is_day&temperature_unit=fahrenheit&timezone=America%2FChicago');
+    if (!r.ok) throw new Error(r.status);
+    const j = await r.json(); if (j && j.current) WX.live = j.current;
+  } catch { /* weather unavailable here: time of day still works */ }
+  if (WX.mode === 'Live') setLook('Live');
+}
+$('#wx').addEventListener('click', () => { $('#wxp').hidden = !$('#wxp').hidden; });
+$('#wxp').addEventListener('click', e => { const b = e.target.closest('[data-look]'); if (b) setLook(b.dataset.look); });
+let wxClock = 0;
+function wxTick(dt, now, camD) {
+  if (WX.fogN && WX.fogN !== 1) { scene.fog.near *= WX.fogN; scene.fog.far = Math.max(scene.fog.near + 30, scene.fog.far * WX.fogF); }
+  if ((wxClock += dt) > 60) { wxClock = 0; if (WX.mode === 'Live') setLook('Live'); }
+  const S = Math.min(240, Math.max(26, camD * 1.15)), H = S * 0.7, tx = controls.target.x, tz = controls.target.z, t = now / 1000;
+  if (rain.visible) {
+    const len = S * 0.018, sp = S * 0.9;
+    for (let i = 0; i < RAIN_N; i++) {
+      const a = rainSeed[i * 3], b = rainSeed[i * 3 + 1], c = rainSeed[i * 3 + 2];
+      const y = H - ((t * sp * (0.8 + c * 0.4) + c * H) % H), x = tx + (a - 0.5) * S - 0.3 * len, z = tz + (b - 0.5) * S;
+      rainPos.set([x, y, z, x + len * 0.3, y + len, z], i * 6);
+    }
+    rainGeo.attributes.position.needsUpdate = true;
+  }
+  if (snow.visible) {
+    snowMat.size = Math.max(0.18, S * 0.006);
+    for (let i = 0; i < SNOW_N; i++) {
+      const a = snowSeed[i * 3], b = snowSeed[i * 3 + 1], c = snowSeed[i * 3 + 2];
+      const y = H - ((t * S * 0.06 * (0.6 + c * 0.6) + c * H) % H);
+      snowPos[i * 3] = tx + (a - 0.5) * S + Math.sin(t * 0.7 + c * 9) * S * 0.01; snowPos[i * 3 + 1] = y; snowPos[i * 3 + 2] = tz + (b - 0.5) * S + Math.cos(t * 0.5 + a * 7) * S * 0.01;
+    }
+    snowGeo.attributes.position.needsUpdate = true;
+  }
+  if (WX.storm && !reduced) {
+    if (now > WX.nextFlash) { WX.flash = 1; WX.nextFlash = now + 4000 + Math.random() * 9000; }
+    if (WX.flash > 0) { WX.flash = Math.max(0, WX.flash - dt * 5); hemi.intensity = 0.7 + WX.flash * 2.5; }
+  }
+}
+setLook('Live');
+fetchWx(); setInterval(fetchWx, 10 * 60 * 1000);
+
+
+/* ---------- live location, Waze-style (stays on this device, never saved) ---------- */
+const ME = { on: false, follow: false, pos: null, target: null, acc: 0, heading: null, watch: null, near: new Set(), prevSort: null };
+const meGroup = new THREE.Group(); meGroup.visible = false; scene.add(meGroup);
+const meBlue = new THREE.MeshBasicMaterial({ color: '#3d9bff' });
+const meDot = new THREE.Mesh(new THREE.SphereGeometry(0.3, 20, 14), meBlue); meDot.position.y = 0.5; meGroup.add(meDot);
+const meRim = new THREE.Mesh(new THREE.SphereGeometry(0.4, 20, 14), new THREE.MeshBasicMaterial({ color: '#ffffff' })); meRim.position.y = 0.5; meRim.scale.y = 0.35; meGroup.add(meRim);
+const accGeo = new THREE.CircleGeometry(1, 48); accGeo.rotateX(-Math.PI / 2);
+const meAcc = new THREE.Mesh(accGeo, new THREE.MeshBasicMaterial({ color: '#3d9bff', transparent: true, opacity: 0.16, depthWrite: false })); meAcc.position.y = 0.05; meGroup.add(meAcc);
+const pulseGeo = new THREE.RingGeometry(0.42, 0.58, 48); pulseGeo.rotateX(-Math.PI / 2);
+const mePulse = new THREE.Mesh(pulseGeo, new THREE.MeshBasicMaterial({ color: '#3d9bff', transparent: true, opacity: 0.6, depthWrite: false, side: THREE.DoubleSide })); mePulse.position.y = 0.07; meGroup.add(mePulse);
+const coneShape = new THREE.Shape(); coneShape.moveTo(0, 0); coneShape.lineTo(-0.55, 1.5); coneShape.lineTo(0.55, 1.5); coneShape.lineTo(0, 0);
+const coneGeo = new THREE.ShapeGeometry(coneShape); coneGeo.rotateX(-Math.PI / 2);
+const meCone = new THREE.Mesh(coneGeo, new THREE.MeshBasicMaterial({ color: '#3d9bff', transparent: true, opacity: 0.35, depthWrite: false, side: THREE.DoubleSide })); meCone.position.y = 0.08; meCone.visible = false; meGroup.add(meCone);
+const meBeam = new THREE.Mesh(beamGeo, new THREE.MeshBasicMaterial({ color: '#3d9bff', transparent: true, opacity: 0.28, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })); meBeam.scale.y = 30; meBeam.position.y = 0.6; meGroup.add(meBeam);
+const meLabelEl = document.createElement('div'); meLabelEl.className = 'lbl'; meLabelEl.style.cssText = 'color:#cfe6ff;font-size:13px'; meLabelEl.textContent = 'You';
+const meLabel = new CSS2DObject(meLabelEl); meLabel.position.y = 1.5; meGroup.add(meLabel);
+
+function spotKm(s) { if (!ME.pos) return Infinity; const p = pins.get(s.id); const [x, z] = p ? [p.g.position.x, p.g.position.z] : posOf(s); const [mx, mz] = toXZ(ME.pos.lat, ME.pos.lng); return Math.hypot(x - mx, z - mz) * 0.1; }
+function fmtDist(km) { if (!Number.isFinite(km)) return ''; const mi = km * 0.621371; if (mi < 0.1) return `${Math.max(50, Math.round(mi * 5280 / 50) * 50)} ft`; return `${mi < 10 ? mi.toFixed(1) : Math.round(mi)} mi`; }
+function setLocBtn(state) { const b = $('#locBtn'); b.classList.remove('loc-on', 'loc-follow', 'loc-wait'); if (state !== 'off') b.classList.add('loc-' + state); b.setAttribute('aria-label', state === 'off' ? 'Show my location' : state === 'follow' ? 'Stop sharing location' : 'Follow my location'); }
+function onPos(p) {
+  const { latitude: lat, longitude: lng, accuracy, heading, speed } = p.coords;
+  const first = !ME.pos;
+  ME.pos = { lat, lng }; ME.acc = accuracy || 0;
+  if (Number.isFinite(heading) && (speed || 0) > 0.7) ME.heading = heading;
+  const [x, z] = toXZ(lat, lng); ME.target = new THREE.Vector3(x, 0, z);
+  if (first) {
+    meGroup.position.copy(ME.target); meGroup.visible = true;
+    ME.prevSort = ui.sort; ui.sort = 'near'; $('#sortSel').value = 'near';
+    if (inCity(x, z) || inOak(x, z)) { ME.follow = true; setLocBtn('follow'); flyTo(ME.target.clone(), 9, 1400); toast('Found you. Your location stays on this phone.'); }
+    else { setLocBtn('on'); toast("You're outside the map area, but distances still work."); }
+  }
+  meAcc.scale.setScalar(Math.max(0.6, Math.min(20, ME.acc / 100)));
+  checkNear(); renderList(); if (ui.sel) renderCard();
+}
+function onPosErr(e) {
+  const msg = e && e.code === 1 ? 'Location is blocked. Allow location for this site in your browser settings, then tap the button again.' : "Couldn't find your location yet. Try again outside or with Wi-Fi on.";
+  toast(msg); if (e && e.code === 1) stopLocation();
+}
+function startLocation() {
+  if (!navigator.geolocation) { toast("This browser can't share your location."); return; }
+  ME.on = true; setLocBtn('wait'); toast('Finding you…');
+  try { ME.watch = navigator.geolocation.watchPosition(onPos, onPosErr, { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 }); } catch (e) { onPosErr(e); }
+}
+function stopLocation() {
+  if (ME.watch != null) try { navigator.geolocation.clearWatch(ME.watch); } catch {}
+  ME.on = false; ME.follow = false; ME.pos = null; ME.target = null; ME.watch = null; meGroup.visible = false; ME.near.clear();
+  if (ui.sort === 'near') { ui.sort = ME.prevSort && ME.prevSort !== 'near' ? ME.prevSort : 'rating'; $('#sortSel').value = ui.sort; }
+  setLocBtn('off'); renderList(); if (ui.sel) renderCard();
+}
+$('#locBtn').addEventListener('click', () => {
+  if (!ME.on) return startLocation();
+  if (!ME.pos) return;
+  if (!ME.follow) { ME.follow = true; setLocBtn('follow'); flyTo(meGroup.position.clone(), 9, 900); return; }
+  stopLocation(); toast('Location off');
+});
+controls.addEventListener('start', () => { if (ME.follow) { ME.follow = false; setLocBtn('on'); } });
+function checkNear() {
+  for (const s of spots) {
+    const km = spotKm(s);
+    if (km < 0.12 && !ME.near.has(s.id)) { ME.near.add(s.id); toast(`You're near ${s.name}${s.rating !== null ? ' · ★ ' + s.rating.toFixed(1) : ''}`); }
+    else if (km > 0.4 && ME.near.has(s.id)) ME.near.delete(s.id);
+  }
+}
+const meDelta = new THREE.Vector3();
+function meTick(dt, now) {
+  if (!meGroup.visible || !ME.target) return;
+  meGroup.position.lerp(ME.target, Math.min(1, dt * 4));
+  const t = now / 1000, k = (t * 0.8) % 1;
+  mePulse.scale.setScalar(1 + k * 2.6); mePulse.material.opacity = 0.6 * (1 - k);
+  meCone.visible = ME.heading != null; if (ME.heading != null) meCone.rotation.y = -ME.heading * Math.PI / 180;
+  if (ME.follow && !flight) { meDelta.copy(meGroup.position).sub(controls.target); meDelta.y = 0; const step = Math.min(1, dt * 3); controls.target.addScaledVector(meDelta, step); camera.position.addScaledVector(meDelta, step); }
+}
+
+/* ---------- loop ---------- */
+function resize() {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight); labelRenderer.setSize(innerWidth, innerHeight);
+  if (composer) composer.setSize(innerWidth, innerHeight);
+}
+addEventListener('resize', resize);
+let last = performance.now(), frame = 0;
+function tick(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (flight) {
+    const k = Math.min(1, (now - flight.t0) / flight.dur), e = ease(k);
+    camera.position.lerpVectors(flight.fromP, flight.toP, e);
+    controls.target.lerpVectors(flight.fromT, flight.toT, e);
+    if (k >= 1) flight = null;
+  }
+  controls.target.x = Math.max(-270, Math.min(110, controls.target.x)); controls.target.z = Math.max(-175, Math.min(285, controls.target.z)); controls.target.y = 0;
+  controls.update();
+  const t = now / 1000, camD = camera.position.distanceTo(controls.target);
+  scene.fog.near = Math.max(60, camD * 0.9); scene.fog.far = Math.max(200, camD * 3 + 80);
+  moon.position.copy(controls.target).addScaledVector(WX.dir, 90); moon.target.position.copy(controls.target);
+  wxTick(dt, now, camD); meTick(dt, now);
+  if (!(frame++ % 6)) for (const o of LABELS) { const tr = o.userData.tier, dd = camera.position.distanceTo(o.position); o.visible = tr === 3 ? dd < 900 : tr === 2 ? dd < 170 : tr === 1 ? dd < 65 : false; }
+  for (const [id, p] of pins) {
+    if (!p.g.visible) continue;
+    const sel = id === ui.sel, hov = id === ui.hover;
+    p.star.rotation.y += dt * (sel ? 2.4 : 0.9);
+    p.star.position.y = p.H + 0.45 + (reduced ? 0 : Math.sin(t * 1.6 + p.phase) * 0.08);
+    const s = (sel ? 1.6 : hov ? 1.35 : 1) * (WX.pinBoost || 1); p.star.scale.setScalar(p.star.scale.x + (s - p.star.scale.x) * 0.2);
+    const pulse = reduced ? 1 : 1 + ((t * 0.6 + p.phase) % 1) * (sel ? 2.2 : 0.9);
+    p.ring.scale.setScalar(pulse);
+  }
+  wheel.rotation.z += dt * 0.2;
+  if (composer) composer.render(); else renderer.render(scene, camera);
+  labelRenderer.render(scene, camera);
+  requestAnimationFrame(tick);
+}
+flyTo(HOME.target, 0, reduced ? 1 : 3400, HOME.pos);
+refresh();
+requestAnimationFrame(tick);
+initData();
+window.__cfm = { get spots() { return spots; }, ui, data, pins, select, nearestHood, district, HOODS, toXZ };
+}
+</script>
+</body>
+</html>

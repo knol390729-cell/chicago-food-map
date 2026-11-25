@@ -438,10 +438,11 @@ function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.ad
 /* ---------- renderer / scene ---------- */
 const stage = $('#stage');
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio || 1, isTouch ? 1.5 : 1.75));
+const PR_MAX = Math.min(devicePixelRatio || 1, isTouch ? 1.25 : 1.75);
+renderer.setPixelRatio(PR_MAX);
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = isTouch ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -479,7 +480,7 @@ const hemi = new THREE.HemisphereLight('#4a6a9c', '#0a0e14', 0.7);
 scene.add(hemi);
 const moon = new THREE.DirectionalLight('#b9ccff', 0.95);
 moon.castShadow = true;
-moon.shadow.mapSize.set(2048, 2048);
+moon.shadow.mapSize.set(isTouch ? 1024 : 2048, isTouch ? 1024 : 2048);
 Object.assign(moon.shadow.camera, { left: -50, right: 50, top: 50, bottom: -50, near: 1, far: 220 });
 moon.shadow.bias = -0.0005;
 scene.add(moon, moon.target);
@@ -1636,6 +1637,29 @@ addEventListener('blur', () => keyPan.clear());
 { let seen = false; try { seen = localStorage.getItem('cfm-nav-tip') === '1'; localStorage.setItem('cfm-nav-tip', '1'); } catch {}
   if (!seen) setTimeout(() => toast(matchMedia('(pointer: coarse)').matches ? 'Drag to move around · two fingers to zoom, tilt and spin' : 'Drag to move · scroll to zoom · right-drag or Shift-drag to spin'), 2600); }
 
+/* ---------- smooth shadows + automatic quality ---------- */
+// The shadow area follows the view; snapping it to whole shadow-pixels stops shadows crawling while you move.
+const _su = new THREE.Vector3(), _sv = new THREE.Vector3(), _sc = new THREE.Vector3(), _UP = new THREE.Vector3(0, 1, 0);
+function snapShadow() {
+  const d = WX.dir, tex = 100 / moon.shadow.mapSize.x, t = controls.target;
+  _su.crossVectors(d, _UP); if (_su.lengthSq() < 1e-8) _su.set(1, 0, 0); _su.normalize(); _sv.crossVectors(_su, d).normalize();
+  const a = Math.round(t.dot(_su) / tex) * tex, b = Math.round(t.dot(_sv) / tex) * tex;
+  _sc.copy(_su).multiplyScalar(a).addScaledVector(_sv, b).addScaledVector(d, t.dot(d));
+  moon.target.position.copy(_sc); moon.position.copy(_sc).addScaledVector(d, 90);
+}
+// If a phone can't keep up, quietly step quality down so moving stays smooth: sharpness, then glow, then shadows.
+const PERF = { ema: 16, slow: 0, level: 0, since: performance.now() + 4000 };
+function perfTick(dt, now) {
+  if (document.hidden || now < PERF.since || PERF.level >= 3) return;
+  PERF.ema += (dt * 1000 - PERF.ema) * 0.05;
+  PERF.slow = PERF.ema > 28 ? PERF.slow + dt : Math.max(0, PERF.slow - dt);
+  if (PERF.slow < 1.5) return;
+  PERF.level++; PERF.slow = 0; PERF.ema = 16; PERF.since = now + 2500;
+  if (PERF.level === 1) { renderer.setPixelRatio(Math.min(1, PR_MAX)); if (composer) { composer.setPixelRatio?.(Math.min(1, PR_MAX)); composer.setSize(innerWidth, innerHeight); } }
+  else if (PERF.level === 2) composer = null;
+  else if (PERF.level === 3) { moon.castShadow = false; renderer.shadowMap.autoUpdate = false; }
+}
+
 /* ---------- loop ---------- */
 function resize() {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
@@ -1652,17 +1676,17 @@ function tick(now) {
     controls.target.lerpVectors(flight.fromT, flight.toT, e);
     if (k >= 1) flight = null;
   }
-  { // keep the view over Chicago; slide the camera with the target so it never feels stuck or twists
-    const t = controls.target, x = Math.max(-270, Math.min(110, t.x)), z = Math.max(-175, Math.min(285, t.z));
-    camera.position.x += x - t.x; camera.position.z += z - t.z; camera.position.y -= t.y; t.set(x, 0, z); }
   if (keyPan.size && !flight) { const d = camera.position.distanceTo(controls.target) * dt * 0.9, f = new THREE.Vector3(), r = new THREE.Vector3();
     camera.getWorldDirection(f); f.y = 0; f.normalize(); r.crossVectors(f, camera.up).normalize();
     const m = new THREE.Vector3(); for (const k of keyPan) m.addScaledVector(k === 'u' ? f : k === 'd' ? f : r, k === 'd' || k === 'l' ? -1 : 1);
     if (m.lengthSq()) { m.normalize().multiplyScalar(d); controls.target.add(m); camera.position.add(m); if (ME.follow) { ME.follow = false; setLocBtn('on'); } } }
   controls.update();
+  { // keep the view over Chicago (after the controls move, so edges don't jitter against damping)
+    const t = controls.target, x = Math.max(-270, Math.min(110, t.x)), z = Math.max(-175, Math.min(285, t.z));
+    camera.position.x += x - t.x; camera.position.z += z - t.z; camera.position.y -= t.y; t.set(x, 0, z); }
   const t = now / 1000, camD = camera.position.distanceTo(controls.target);
   scene.fog.near = Math.max(60, camD * 0.9); scene.fog.far = Math.max(200, camD * 3 + 80);
-  moon.position.copy(controls.target).addScaledVector(WX.dir, 90); moon.target.position.copy(controls.target);
+  snapShadow(); perfTick(dt, now);
   wxTick(dt, now, camD); meTick(dt, now);
   if (!(frame++ % 6)) for (const o of LABELS) { const tr = o.userData.tier, dd = camera.position.distanceTo(o.position); o.visible = tr === 3 ? dd < 900 : tr === 2 ? dd < 170 : tr === 1 ? dd < 65 : false; }
   for (const [id, p] of pins) {
@@ -1683,6 +1707,8 @@ flyTo(HOME.target, 0, reduced ? 1 : 3400, HOME.pos);
 refresh();
 requestAnimationFrame(tick);
 initData();
+window.__cfm_perf = () => ({ level: PERF.level, ema: PERF.ema });
+window.__cfm_shadow = () => { const tex = 100 / moon.shadow.mapSize.x, p = moon.target.position, d = WX.dir; _su.crossVectors(d, _UP).normalize(); _sv.crossVectors(_su, d).normalize(); const f = x => Math.abs(x / tex - Math.round(x / tex)) < 1e-3; return { ok: f(p.dot(_su)) && f(p.dot(_sv)), size: moon.shadow.mapSize.x }; };
 window.__cfm_ctrl = () => ({ x: controls.target.x, z: controls.target.z, one: controls.touches.ONE, keys: [...keyPan].join(''), fl: !!flight });
 window.__cfm = { get spots() { return spots; }, ui, data, pins, select, nearestHood, district, HOODS, toXZ };
 }

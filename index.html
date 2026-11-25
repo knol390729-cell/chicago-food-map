@@ -481,8 +481,8 @@ scene.add(hemi);
 const moon = new THREE.DirectionalLight('#b9ccff', 0.95);
 moon.castShadow = true;
 moon.shadow.mapSize.set(isTouch ? 1024 : 2048, isTouch ? 1024 : 2048);
-Object.assign(moon.shadow.camera, { left: -50, right: 50, top: 50, bottom: -50, near: 1, far: 220 });
-moon.shadow.bias = -0.0005;
+Object.assign(moon.shadow.camera, { left: -50, right: 50, top: 50, bottom: -50, near: 1, far: 420 });
+moon.shadow.bias = -0.0005; moon.shadow.normalBias = 0.03;
 scene.add(moon, moon.target);
 const warm = new THREE.DirectionalLight('#ffb070', 0.35);
 warm.position.set(30, 20, 40);
@@ -508,11 +508,13 @@ grid.position.set(-80, 0.006, 60.8);
 scene.add(grid);
 
 const SHAPE_MATS = {};
+// Flat map layers sit a hair apart; a depth offset per layer keeps them from flickering over each other.
+function layerOffset(mat, y) { if (mat.userData.layered) return mat; mat.userData.layered = true; mat.polygonOffset = true; mat.polygonOffsetFactor = -1; mat.polygonOffsetUnits = -Math.max(1, Math.round(y * 400)); return mat; }
 function flatShape(pts, color, y, opts = {}) {
   const s = new THREE.Shape();
   pts.forEach(([x, z], i) => i ? s.lineTo(x, -z) : s.moveTo(x, -z));
   const m = new THREE.Mesh(new THREE.ShapeGeometry(s), new THREE.MeshStandardMaterial({ color, roughness: opts.rough ?? 0.9, metalness: opts.metal ?? 0, emissive: opts.emissive ?? '#000000' }));
-  m.rotation.x = -Math.PI / 2; m.position.y = y; m.receiveShadow = true;
+  m.rotation.x = -Math.PI / 2; m.position.y = y; m.receiveShadow = true; layerOffset(m.material, y);
   (SHAPE_MATS[color] ||= []).push(m.material);
   scene.add(m); return m;
 }
@@ -536,7 +538,7 @@ for (const b of AIRPORTS) flatShape([[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [
 
 const RIB = new Map();
 function ribbon(pts, width, mat, y, joints = true) {
-  if (!RIB.has(mat)) RIB.set(mat, []);
+  if (!RIB.has(mat)) RIB.set(mat, []); layerOffset(mat, y);
   const list = RIB.get(mat);
   for (let i = 0; i < pts.length - 1; i++) {
     const [ax, az] = pts[i], [bx, bz] = pts[i + 1], len = Math.hypot(bx - ax, bz - az);
@@ -1640,12 +1642,16 @@ addEventListener('blur', () => keyPan.clear());
 /* ---------- smooth shadows + automatic quality ---------- */
 // The shadow area follows the view; snapping it to whole shadow-pixels stops shadows crawling while you move.
 const _su = new THREE.Vector3(), _sv = new THREE.Vector3(), _sc = new THREE.Vector3(), _UP = new THREE.Vector3(0, 1, 0);
-function snapShadow() {
-  const d = WX.dir, tex = 100 / moon.shadow.mapSize.x, t = controls.target;
+// Shadow area grows in steps as you zoom out, so shadows reach the edge of what you can see (steps avoid shimmer).
+const SH_STEPS = [36, 54, 80, 120, 180]; let shHalf = 50;
+function snapShadow(camD) {
+  const want = SH_STEPS.find(h => h >= camD * 0.75) || SH_STEPS[SH_STEPS.length - 1];
+  if (want !== shHalf) { shHalf = want; Object.assign(moon.shadow.camera, { left: -want, right: want, top: want, bottom: -want }); moon.shadow.camera.updateProjectionMatrix?.(); }
+  const d = WX.dir, tex = 2 * shHalf / moon.shadow.mapSize.x, t = controls.target;
   _su.crossVectors(d, _UP); if (_su.lengthSq() < 1e-8) _su.set(1, 0, 0); _su.normalize(); _sv.crossVectors(_su, d).normalize();
   const a = Math.round(t.dot(_su) / tex) * tex, b = Math.round(t.dot(_sv) / tex) * tex;
   _sc.copy(_su).multiplyScalar(a).addScaledVector(_sv, b).addScaledVector(d, t.dot(d));
-  moon.target.position.copy(_sc); moon.position.copy(_sc).addScaledVector(d, 90);
+  moon.target.position.copy(_sc); moon.position.copy(_sc).addScaledVector(d, 200);
 }
 // If a phone can't keep up, quietly step quality down so moving stays smooth: sharpness, then glow, then shadows.
 const PERF = { ema: 16, slow: 0, level: 0, since: performance.now() + 4000 };
@@ -1686,7 +1692,9 @@ function tick(now) {
     camera.position.x += x - t.x; camera.position.z += z - t.z; camera.position.y -= t.y; t.set(x, 0, z); }
   const t = now / 1000, camD = camera.position.distanceTo(controls.target);
   scene.fog.near = Math.max(60, camD * 0.9); scene.fog.far = Math.max(200, camD * 3 + 80);
-  snapShadow(); perfTick(dt, now);
+  snapShadow(camD); perfTick(dt, now);
+  { // keep depth precision tight around what you're looking at, so nothing flickers from far away
+    const n = Math.min(6, Math.max(0.2, camD * 0.04)); if (Math.abs(n - camera.near) > camera.near * 0.08) { camera.near = n; camera.updateProjectionMatrix(); } }
   wxTick(dt, now, camD); meTick(dt, now);
   if (!(frame++ % 6)) for (const o of LABELS) { const tr = o.userData.tier, dd = camera.position.distanceTo(o.position); o.visible = tr === 3 ? dd < 900 : tr === 2 ? dd < 170 : tr === 1 ? dd < 65 : false; }
   for (const [id, p] of pins) {
@@ -1708,7 +1716,7 @@ refresh();
 requestAnimationFrame(tick);
 initData();
 window.__cfm_perf = () => ({ level: PERF.level, ema: PERF.ema });
-window.__cfm_shadow = () => { const tex = 100 / moon.shadow.mapSize.x, p = moon.target.position, d = WX.dir; _su.crossVectors(d, _UP).normalize(); _sv.crossVectors(_su, d).normalize(); const f = x => Math.abs(x / tex - Math.round(x / tex)) < 1e-3; return { ok: f(p.dot(_su)) && f(p.dot(_sv)), size: moon.shadow.mapSize.x }; };
+window.__cfm_shadow = () => { const tex = 2 * shHalf / moon.shadow.mapSize.x, p = moon.target.position, d = WX.dir; _su.crossVectors(d, _UP).normalize(); _sv.crossVectors(_su, d).normalize(); const f = x => Math.abs(x / tex - Math.round(x / tex)) < 1e-3; return { ok: f(p.dot(_su)) && f(p.dot(_sv)), size: moon.shadow.mapSize.x, half: shHalf, near: camera.near }; };
 window.__cfm_ctrl = () => ({ x: controls.target.x, z: controls.target.z, one: controls.touches.ONE, keys: [...keyPan].join(''), fl: !!flight });
 window.__cfm = { get spots() { return spots; }, ui, data, pins, select, nearestHood, district, HOODS, toXZ };
 }

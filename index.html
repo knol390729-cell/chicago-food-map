@@ -467,6 +467,10 @@ controls.maxDistance = 640;
 controls.target.copy(CITYVIEW.target);
 controls.screenSpacePanning = false;
 controls.zoomSpeed = 1.2;
+// map-style: drag moves around the city; two fingers (or right-drag / shift-drag) tilt and spin
+controls.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
+controls.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE };
+controls.panSpeed = 1.15;
 
 const hemi = new THREE.HemisphereLight('#4a6a9c', '#0a0e14', 0.7);
 scene.add(hemi);
@@ -1620,6 +1624,14 @@ function meTick(dt, now) {
   if (ME.follow && !flight) { meDelta.copy(meGroup.position).sub(controls.target); meDelta.y = 0; const step = Math.min(1, dt * 3); controls.target.addScaledVector(meDelta, step); camera.position.addScaledVector(meDelta, step); }
 }
 
+/* ---------- keyboard: arrows / WASD move around the city ---------- */
+const keyPan = new Set(), KEYMAP = { ArrowUp: 'u', KeyW: 'u', ArrowDown: 'd', KeyS: 'd', ArrowLeft: 'l', KeyA: 'l', ArrowRight: 'r', KeyD: 'r' };
+addEventListener('keydown', e => { const k = KEYMAP[e.code]; if (!k || e.metaKey || e.ctrlKey || e.altKey || /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '') || !$('#scrim').hidden || !$('#passScrim').hidden || (ui.sel && (k === 'l' || k === 'r'))) return; keyPan.add(k); e.preventDefault(); });
+addEventListener('keyup', e => { const k = KEYMAP[e.code]; if (k) keyPan.delete(k); });
+addEventListener('blur', () => keyPan.clear());
+{ let seen = false; try { seen = localStorage.getItem('cfm-nav-tip') === '1'; localStorage.setItem('cfm-nav-tip', '1'); } catch {}
+  if (!seen) setTimeout(() => toast(matchMedia('(pointer: coarse)').matches ? 'Drag to move around · two fingers to zoom, tilt and spin' : 'Drag to move · scroll to zoom · right-drag or Shift-drag to spin'), 2600); }
+
 /* ---------- loop ---------- */
 function resize() {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
@@ -1636,7 +1648,13 @@ function tick(now) {
     controls.target.lerpVectors(flight.fromT, flight.toT, e);
     if (k >= 1) flight = null;
   }
-  controls.target.x = Math.max(-270, Math.min(110, controls.target.x)); controls.target.z = Math.max(-175, Math.min(285, controls.target.z)); controls.target.y = 0;
+  { // keep the view over Chicago; slide the camera with the target so it never feels stuck or twists
+    const t = controls.target, x = Math.max(-270, Math.min(110, t.x)), z = Math.max(-175, Math.min(285, t.z));
+    camera.position.x += x - t.x; camera.position.z += z - t.z; camera.position.y -= t.y; t.set(x, 0, z); }
+  if (keyPan.size && !flight) { const d = camera.position.distanceTo(controls.target) * dt * 0.9, f = new THREE.Vector3(), r = new THREE.Vector3();
+    camera.getWorldDirection(f); f.y = 0; f.normalize(); r.crossVectors(f, camera.up).normalize();
+    const m = new THREE.Vector3(); for (const k of keyPan) m.addScaledVector(k === 'u' ? f : k === 'd' ? f : r, k === 'd' || k === 'l' ? -1 : 1);
+    if (m.lengthSq()) { m.normalize().multiplyScalar(d); controls.target.add(m); camera.position.add(m); if (ME.follow) { ME.follow = false; setLocBtn('on'); } } }
   controls.update();
   const t = now / 1000, camD = camera.position.distanceTo(controls.target);
   scene.fog.near = Math.max(60, camD * 0.9); scene.fog.far = Math.max(200, camD * 3 + 80);
@@ -1661,6 +1679,7 @@ flyTo(HOME.target, 0, reduced ? 1 : 3400, HOME.pos);
 refresh();
 requestAnimationFrame(tick);
 initData();
+window.__cfm_ctrl = () => ({ x: controls.target.x, z: controls.target.z, one: controls.touches.ONE, keys: [...keyPan].join(''), fl: !!flight });
 window.__cfm = { get spots() { return spots; }, ui, data, pins, select, nearestHood, district, HOODS, toXZ };
 }
 </script>
